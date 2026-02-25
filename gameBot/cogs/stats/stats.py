@@ -1,13 +1,16 @@
 import discord
+import logging
 from discord.ext import commands
 from database.manager import DatabaseManager
+
+logger = logging.getLogger('gameBot.stats')
 
 class StatsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = DatabaseManager()
 
-    @commands.command(name="프로필")
+    @commands.hybrid_command(name="프로필", description="본인 또는 다른 유저의 전적을 확인합니다.")
     async def profile(self, ctx, member: discord.Member = None):
         """본인 또는 다른 유저의 전적을 확인합니다."""
         member = member or ctx.author
@@ -39,7 +42,7 @@ class StatsCog(commands.Cog):
         
         await ctx.send(embed=embed)
 
-    @commands.command(name="랭킹")
+    @commands.hybrid_command(name="랭킹", description="서버 내 게임별 Top 3 랭킹을 확인합니다.")
     async def ranking(self, ctx):
         """서버 내 게임별 Top 3 랭킹을 확인합니다."""
         liar_top = self.db.get_top_rankings('liar', limit=3)

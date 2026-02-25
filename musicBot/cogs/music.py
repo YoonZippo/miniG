@@ -1,7 +1,10 @@
 import discord
 import asyncio
 import yt_dlp
+import logging
 from discord.ext import commands
+
+logger = logging.getLogger('musicBot.music')
 
 # yt-dlp 옵션 설정
 YDL_OPTIONS = {
@@ -163,7 +166,7 @@ class Music(commands.Cog):
             return f"{hours:02d}:{mins:02d}:{secs:02d}"
         return f"{mins:02d}:{secs:02d}"
 
-    @commands.command(name="유튜브", aliases=["play", "p"], help="유튜브 검색 및 재생")
+    @commands.hybrid_command(name="유튜브", aliases=["play", "p"], description="유튜브 검색 및 재생을 수행합니다.")
     async def play(self, ctx, *, search: str):
         if not ctx.author.voice:
             return await ctx.send("❌ 먼저 음성 채널에 접속해 주세요!")
@@ -192,7 +195,7 @@ class Music(commands.Cog):
             else:
                 await self.play_music(ctx, song)
 
-    @commands.command(name="skip", help="현재 곡 건너뛰기")
+    @commands.hybrid_command(name="건너뛰기", aliases=["skip", "s"], description="현재 재생 중인 곡을 건너뜁니다.")
     async def skip(self, ctx):
         if ctx.voice_client and ctx.voice_client.is_playing():
             ctx.voice_client.stop()
@@ -200,7 +203,7 @@ class Music(commands.Cog):
         else:
             await ctx.send("❌ 현재 재생 중인 곡이 없습니다.")
 
-    @commands.command(name="stop", help="재생 중지 및 채널 나가기")
+    @commands.hybrid_command(name="정지", aliases=["stop"], description="재생을 중지하고 채널에서 나갑니다.")
     async def stop(self, ctx):
         if ctx.voice_client:
             self.queue[ctx.guild.id] = []
@@ -210,6 +213,24 @@ class Music(commands.Cog):
             await ctx.send("👋 재생을 중지하고 채널에서 나갔습니다.")
         else:
             await ctx.send("❌ 봇이 이미 음성 채널에 있지 않습니다.")
+
+    @commands.hybrid_command(name="대기열", aliases=["queue", "q"], description="현재 재생 대기열 목록을 확인합니다.")
+    async def queue_list(self, ctx):
+        guild_id = ctx.guild.id
+        queue = self.queue.get(guild_id, [])
+        
+        if not queue:
+            return await ctx.send("📋 대기열이 비어 있습니다.")
+            
+        embed = discord.Embed(title="📋 현재 대기열", color=discord.Color.blue())
+        desc = ""
+        for i, song in enumerate(queue[:10], 1):
+            desc += f"{i}. {song['title']}\n"
+        if len(queue) > 10:
+            desc += f"...외 {len(queue)-10}곡"
+        
+        embed.description = desc
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Music(bot))

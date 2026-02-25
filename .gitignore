@@ -28,3 +28,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Logs
+gameBot/logs/
+musicBot/logs/
+*.log

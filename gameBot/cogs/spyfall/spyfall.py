@@ -1,9 +1,12 @@
 import discord
+import logging
 from discord.ext import commands
 import random
 import asyncio
 import os
 from typing import List, Dict
+
+logger = logging.getLogger('gameBot.spyfall')
 from .locations import SPYFALL_LOCATIONS
 from database.manager import DatabaseManager
 
@@ -425,6 +428,10 @@ class SpyfallCog(commands.Cog):
     """스파이폴 로드용 Cog"""
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.hybrid_command(name="스파이폴", description="스파이폴 게임 모집을 시작합니다.")
+    async def start_spyfall(self, ctx):
+        await start_spyfall_ui(ctx)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):

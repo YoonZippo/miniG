@@ -1,6 +1,31 @@
 import discord
 from discord.ext import commands
 import os
+import logging
+import logging.handlers
+
+# 로깅 설정
+logger = logging.getLogger('gameBot')
+logger.setLevel(logging.INFO)
+
+# 로그 포맷 설정
+formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(name)s: %(message)s')
+
+# 파일 핸들러 (로그 회전 포함)
+file_handler = logging.handlers.RotatingFileHandler(
+    filename='logs/bot.log',
+    encoding='utf-8',
+    maxBytes=5*1024*1024, # 5MB
+    backupCount=5
+)
+file_handler.setFormatter(formatter)
+
+# 콘솔 핸들러
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -21,13 +46,13 @@ class MyBot(commands.Bot):
         
         # 슬래시 명령어 동기화 (디스코드 서버에 명령어 등록)
         await self.tree.sync()
-        print("슬래시 명령어 동기화가 완료되었습니다!")
+        logger.info("슬래시 명령어 동기화가 완료되었습니다!")
 
 bot = MyBot()
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user.name} 봇이 성공적으로 로그인했습니다!')
+    logger.info(f'{bot.user.name} 봇이 성공적으로 로그인했습니다!')
 
 class MainMenuView(discord.ui.View):
     def __init__(self):
@@ -87,7 +112,7 @@ class MainMenuView(discord.ui.View):
     async def other_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("아직 준비 중인 게임입니다.", ephemeral=True)
 
-@bot.command(name="시작")
+@bot.hybrid_command(name="시작", description="미니게임 메인 메뉴를 보여줍니다.")
 async def show_menu(ctx):
     embed = discord.Embed(
         title="🎮 미니게임 봇 메인 메뉴",
@@ -96,7 +121,7 @@ async def show_menu(ctx):
     )
     await ctx.send(embed=embed, view=MainMenuView())
 
-@bot.command(name="종료")
+@bot.hybrid_command(name="종료", description="현재 진행 중인 모든 게임을 강제로 종료합니다.")
 async def force_stop(ctx):
     """현재 진행 중인 게임과 음성 연결을 모두 강제로 종료합니다."""
     # 음성 연결이 있다면 종료

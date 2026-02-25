@@ -1,4 +1,5 @@
 import discord
+import logging
 from discord.ext import commands
 from discord import app_commands
 from typing import Dict, List
@@ -6,6 +7,8 @@ import random
 import asyncio
 from collections import Counter
 from database.manager import DatabaseManager
+
+logger = logging.getLogger('gameBot.liar')
 
 db = DatabaseManager()
 # 현재 채널별로 진행 중인 게임 상태를 저장할 딕셔너리
@@ -493,6 +496,10 @@ class LiarGameCog(commands.Cog):
     """라이어 게임 관련 명령어를 모아둔 Cog"""
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.hybrid_command(name="라이어", description="라이어 게임 모집을 시작합니다.")
+    async def start_liar(self, ctx):
+        await self.start_liar_game_ui(ctx)
 
     async def turn_timer(self, game: 'LiarGame'):
         """턴 제한시간을 관리하는 코루틴"""
