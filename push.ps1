@@ -1,7 +1,10 @@
 # push.ps1 for Windows
 # Usage: .\push.ps1
 
-$msg = Read-Host -Prompt "Enter 'commit' (Empty for 'Self Update')"
+# 한글 출력을 위해 출력 인코딩 설정
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$msg = Read-Host -Prompt "Enter Update comment (if empty, 'Self Update')"
 if (-not $msg) { $msg = "Self Update" }
 
 git add .

@@ -5,6 +5,9 @@ from typing import Dict, List
 import random
 import asyncio
 from collections import Counter
+from database.manager import DatabaseManager
+
+db = DatabaseManager()
 # 현재 채널별로 진행 중인 게임 상태를 저장할 딕셔너리
 active_games: Dict[int, 'LiarGame'] = {}
 
@@ -35,6 +38,8 @@ class LiarGame:
         
         self.phase: str = "LOBBY" # 게임 단계: LOBBY, PLAYING, VOTING, RESOLUTION
         self.votes: Dict[discord.Member, int] = {}
+        self.turn_limit: int = 20 # 기본 턴 제한시간 (초)
+        self.timer_task: asyncio.Task = None # 턴 제한시간 타이머 태스크
 
 class LobbyView(discord.ui.View):
     """참가자를 모집하는 로비 뷰 (버튼 포함)"""
@@ -71,6 +76,20 @@ class LobbyView(discord.ui.View):
         # 이전 모집 로비 메시지의 버튼 비활성화
         await interaction.message.edit(view=None)
 
+    @discord.ui.button(label="제한시간 변경", style=discord.ButtonStyle.secondary, custom_id="change_timer")
+    async def timer_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 방장만 변경 가능
+        if interaction.user != self.game.host:
+            await interaction.response.send_message("방장만 제한시간을 변경할 수 있습니다!", ephemeral=True)
+            return
+        
+        # 순환: 15 -> 20 -> 30 -> 15
+        if self.game.turn_limit == 15: self.game.turn_limit = 20
+        elif self.game.turn_limit == 20: self.game.turn_limit = 30
+        else: self.game.turn_limit = 15
+        
+        await self.update_lobby(interaction)
+
     @discord.ui.button(label="강제 중단", style=discord.ButtonStyle.danger, custom_id="cancel_game")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 방장만 취소할 수 있도록 제한
@@ -90,7 +109,11 @@ class LobbyView(discord.ui.View):
 
     async def update_lobby(self, interaction: discord.Interaction):
         # 로비 임베드 메시지 업데이트
-        embed = discord.Embed(title="🕵️ 라이어 게임 모집 중!", description="참가 버튼을 눌러 게임에 들어오세요.", color=0x2b2d31)
+        embed = discord.Embed(
+            title="🕵️ 라이어 게임 모집 중!", 
+            description=f"참가 버튼을 눌러 게임에 들어오세요.\n\n⏱️ **현재 설정된 턴 제한시간:** {self.game.turn_limit}초", 
+            color=0x2b2d31
+        )
         players_str = "\n".join([f"👤 {p.display_name}" for p in self.game.players])
         embed.add_field(name=f"현재 참가자 ({len(self.game.players)}명)", value=players_str)
         
@@ -170,9 +193,14 @@ class CategorySelect(discord.ui.Select):
         embed.add_field(name="발언 순서", value=turn_list, inline=False)
         
         current_player = self.game.turn_order[self.game.current_turn_index]
-        embed.add_field(name="현재 차례", value=f"👉 {current_player.mention} 님, 채널에 채팅을 쳐서 제시어에 대해 설명해주세요!", inline=False)
+        embed.add_field(name="현재 차례", value=f"👉 {current_player.mention} 님, 채널에 채팅을 쳐서 제시어에 대해 설명해주세요! (제한시간: {self.game.turn_limit}초)", inline=False)
 
         await self.game.channel.send(embed=embed)
+        
+        # 첫 번째 턴 타이머 시작
+        liar_cog = interaction.client.get_cog("LiarGameCog")
+        if liar_cog:
+            self.game.timer_task = asyncio.create_task(liar_cog.turn_timer(self.game))
 
 
 class CategoryView(discord.ui.View):
@@ -200,8 +228,13 @@ class ExtensionVoteView(discord.ui.View):
                 
                 current_player = self.game.turn_order[0]
                 await interaction.channel.send(
-                    f"✅ 연장 투표가 가결되었습니다! 두 번째 라운드를 시작합니다.\n👉 첫 번째 차례: {current_player.mention} 님, 설명해주세요!"
+                    f"✅ 연장 투표가 가결되었습니다! 두 번째 라운드를 시작합니다.\n👉 첫 번째 차례: {current_player.mention} 님, 설명해주세요! (제한시간: {self.game.turn_limit}초)"
                 )
+                # 타이머 재시작
+                liar_cog = interaction.client.get_cog("LiarGameCog")
+                if liar_cog:
+                    if self.game.timer_task: self.game.timer_task.cancel()
+                    self.game.timer_task = asyncio.create_task(liar_cog.turn_timer(self.game))
             else:
                 self.game.phase = "VOTING_FINAL"
                 view = FinalVoteView(self.game)
@@ -360,6 +393,9 @@ async def process_final_vote(game: LiarGame, interaction: discord.Interaction):
         if game.game_mode == "IDIOT":
             embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n바보 라이어는 자신이 왜 라이어인지 아직도 모릅니다! (라이어 제시어: **{game.liar_word}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", color=0x00ff00)
             await interaction.channel.send(embed=embed, view=PostGameView(game))
+            # 전적 기록: 시민 승리
+            for p in game.players:
+                db.update_stats(p.id, 'liar', won=(p != game.liar))
         else:
             # 라이어가 맞으면 직접 채팅을 칠 수 있도록 상태(phase) 변경
             embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 라이어에게는 최후의 변론으로 **제시어를 맞출 기회**가 주어집니다!\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 정답(제시어)을 입력해주세요!**", color=0x3498db)
@@ -368,6 +404,9 @@ async def process_final_vote(game: LiarGame, interaction: discord.Interaction):
     else:
         embed = discord.Embed(title="🚨 라이어 검거 실패!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 선량한 시민이었습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
         await interaction.channel.send(embed=embed, view=PostGameView(game))
+        # 전적 기록: 라이어 승리
+        for p in game.players:
+            db.update_stats(p.id, 'liar', won=(p == game.liar))
 
 class TiebreakerVoteSelect(discord.ui.Select):
     """결선 투표용 선택 메뉴"""
@@ -436,6 +475,9 @@ async def process_tiebreaker_vote(game: LiarGame, interaction: discord.Interacti
         if game.game_mode == "IDIOT":
             embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n바보 라이어는 자신이 왜 라이어인지 아직도 모릅니다! (라이어 제시어: **{game.liar_word}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", color=0x00ff00)
             await interaction.channel.send(embed=embed, view=PostGameView(game))
+            # 전적 기록: 시민 승리
+            for p in game.players:
+                db.update_stats(p.id, 'liar', won=(p != game.liar))
         else:
             embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 라이어에게는 최후의 변론으로 **제시어를 맞출 기회**가 주어집니다!\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 정답(제시어)을 입력해주세요!**", color=0x3498db)
             game.phase = "LIAR_GUESS"
@@ -443,11 +485,47 @@ async def process_tiebreaker_vote(game: LiarGame, interaction: discord.Interacti
     else:
         embed = discord.Embed(title="🚨 라이어 검거 실패!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 선량한 시민이었습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
         await interaction.channel.send(embed=embed, view=PostGameView(game))
+        # 전적 기록: 라이어 승리
+        for p in game.players:
+            db.update_stats(p.id, 'liar', won=(p == game.liar))
 
 class LiarGameCog(commands.Cog):
     """라이어 게임 관련 명령어를 모아둔 Cog"""
     def __init__(self, bot):
         self.bot = bot
+
+    async def turn_timer(self, game: 'LiarGame'):
+        """턴 제한시간을 관리하는 코루틴"""
+        try:
+            await asyncio.sleep(game.turn_limit)
+            # 시간이 다 되면 자동 스킵 처리
+            current_player = game.turn_order[game.current_turn_index]
+            await game.channel.send(f"⚠️ **{current_player.mention} 님이 시간 내에 대답하지 않았습니다!** (자동 넘김)")
+            await self.process_turn(game, game.channel)
+        except asyncio.CancelledError:
+            # 시간 내에 대답하면 타이머 취소됨
+            pass
+
+    async def process_turn(self, game: 'LiarGame', channel):
+        """턴을 실제로 넘기는 로직 (시간 초과나 메시지 입력 시 공통 사용)"""
+        if game.timer_task:
+            game.timer_task.cancel()
+            
+        game.current_turn_index += 1
+
+        # 모든 플레이어가 한 바퀴 발언을 마친 경우
+        if game.current_turn_index >= len(game.turn_order):
+            if game.round_count < 2:
+                game.phase = "VOTING_EXTENSION"
+                await channel.send("모든 플레이어의 발언이 끝났습니다! 한 바퀴 더 듣고 싶으신가요?", view=ExtensionVoteView(game))
+            else:
+                game.phase = "VOTING_FINAL"
+                await channel.send("두 바퀴가 모두 종료되었습니다! 이제 라이어로 의심되는 사람을 투표해주세요.", view=FinalVoteView(game))
+        else:
+            # 턴이 남았다면 다음 플레이어 호출 및 타이머 재시작
+            next_player = game.turn_order[game.current_turn_index]
+            await channel.send(f"👉 다음 차례: {next_player.mention} 님, 설명해주세요! (제한시간: {game.turn_limit}초)")
+            game.timer_task = asyncio.create_task(self.turn_timer(game))
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -499,23 +577,8 @@ class LiarGameCog(commands.Cog):
             
         await message.channel.send(embed=embed)
 
-        # 턴 진행
-        game.current_turn_index += 1
-
-        # 모든 플레이어가 한 바퀴 발언을 마친 경우
-        if game.current_turn_index >= len(game.turn_order):
-            if game.round_count < 2:
-                # 1바퀴째면 연장 투표
-                game.phase = "VOTING_EXTENSION"
-                await message.channel.send("모든 플레이어의 발언이 끝났습니다! 한 바퀴 더 듣고 싶으신가요?", view=ExtensionVoteView(game))
-            else:
-                # 2바퀴째면 최종 투표
-                game.phase = "VOTING_FINAL"
-                await message.channel.send("두 바퀴가 모두 종료되었습니다! 이제 라이어로 의심되는 사람을 투표해주세요.", view=FinalVoteView(game))
-        else:
-            # 턴이 남았다면 다음 플레이어 호출
-            next_player = game.turn_order[game.current_turn_index]
-            await message.channel.send(f"👉 다음 차례: {next_player.mention} 님, 채널에 채팅을 쳐서 제시어에 대해 설명해주세요!")
+        # 턴 진행 공통 로직 호출
+        await self.process_turn(game, message.channel)
 
     async def start_liar_game_ui(self, interaction: discord.Interaction):
         """메인 메뉴의 버튼을 통해 라이어 게임 로비를 생성하는 함수"""

@@ -2,8 +2,12 @@ import discord
 from discord.ext import commands
 import random
 import asyncio
+import os
 from typing import List, Dict
 from .locations import SPYFALL_LOCATIONS
+from database.manager import DatabaseManager
+
+db = DatabaseManager()
 
 # 활성화된 스파이폴 게임들을 관리하는 딕셔너리
 # Key: channel_id, Value: SpyfallGame 객체
@@ -138,7 +142,15 @@ async def start_spyfall_roles(game: SpyfallGame, interaction: discord.Interactio
                     description=f"우리가 모인 장소는 **[{game.location}]** 입니다.\n당신의 역할은 **[{role}]** 입니다.\n\n스파이가 눈치채지 못하게 은밀한 질문을 던져 서로 시민임을 확인하고, 스파이를 색출하세요!",
                     color=0x2ecc71
                 )
-                await player.send(embed=embed)
+                
+                # 장소 이미지 추가
+                img_path = f"assets/images/spyfall/{game.location}.png"
+                if os.path.exists(img_path):
+                    file = discord.File(img_path, filename="location.png")
+                    embed.set_image(url="attachment://location.png")
+                    await player.send(file=file, embed=embed)
+                else:
+                    await player.send(embed=embed)
         except discord.Forbidden:
             await interaction.channel.send(f"⚠️ {player.mention} 님에게 DM을 보낼 수 없습니다. 서버 설정에서 서버 멤버가 보내는 다이렉트 메시지 허용을 켜주세요.")
             await cleanup_spyfall(interaction, game.channel.id)
@@ -160,9 +172,23 @@ async def start_spyfall_roles(game: SpyfallGame, interaction: discord.Interactio
     game.timer_task = asyncio.create_task(discussion_timer(game, game.discussion_message, game_duration_minutes * 60))
 
 async def discussion_timer(game: SpyfallGame, message: discord.Message, duration: int):
-    """지정된 시간 동안 토론을 진행하고, 끝나면 튜표 페이즈로 자동 전환"""
+    """지정된 시간 동안 토론을 진행하고, 알람을 울린 뒤 튜표 페이즈로 자동 전환"""
     try:
-        await asyncio.sleep(duration)
+        # 종료 30초 전까지 대기
+        alert_points = [30, 10, 5]
+        last_sleep = 0
+        
+        for point in alert_points:
+            sleep_time = duration - point - last_sleep
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+                if game.phase == "DISCUSSION":
+                    await game.channel.send(f"⚠️ **토론 종료 {point}초 전입니다!**")
+                last_sleep += sleep_time
+        
+        # 남은 5초 대기
+        await asyncio.sleep(5)
+        
         if game.phase == "DISCUSSION":
             # 시간 초과 시 자동 투표 시작
             await message.edit(view=None)
@@ -264,7 +290,9 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
     await interaction.message.edit(view=None)
     
     from collections import Counter
-    vote_counts = Counter(game.votes.values())
+    # 유저 ID 목록을 리스트로 명시적으로 변환하여 전달
+    vote_list = [v for v in game.votes.values()]
+    vote_counts = Counter(vote_list)
     max_votes = max(vote_counts.values()) if vote_counts else 0
     max_voted_ids = [uid for uid, count in vote_counts.items() if count == max_votes]
     
@@ -285,6 +313,9 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
         )
         game.phase = "ENDED"
         await interaction.channel.send(embed=embed, view=SpyfallPostGameView(game))
+        # 전적 기록: 스파이 승리 (시민 분열)
+        for p in game.players:
+            db.update_stats(p.id, 'spyfall', won=(p == game.spy))
         return
         
     top_voted_id = max_voted_ids[0]
@@ -309,6 +340,9 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
         )
         game.phase = "ENDED"
         await interaction.channel.send(embed=embed, view=SpyfallPostGameView(game))
+        # 전적 기록: 스파이 승리 (엄한 시민 지목)
+        for p in game.players:
+            db.update_stats(p.id, 'spyfall', won=(p == game.spy))
 
 class SpyfallPostGameView(discord.ui.View):
     """게임 종료 후 다시하기 또는 종료를 선택하는 뷰"""
@@ -415,12 +449,18 @@ class SpyfallCog(commands.Cog):
                     description=f"스파이가 정확한 장소 **[{game.location}]** 을(를) 맞췄습니다!\n\n**🎉 스파이가 시민을 속이고 훌륭히 역전했습니다! 🎉**", 
                     color=0xff0000
                 )
+                # 전적 기록: 스파이 승리
+                for p in game.players:
+                    db.update_stats(p.id, 'spyfall', won=(p == game.spy))
             else:
                 embed = discord.Embed(
                     title="🚨 스파이의 정답 확인!", 
                     description=f"스파이가 **오답**({user_guess})을(를) 입력했습니다! (진짜 장소: **{game.location}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", 
                     color=0x00ff00
                 )
+                # 전적 기록: 시민 승리
+                for p in game.players:
+                    db.update_stats(p.id, 'spyfall', won=(p != game.spy))
                 
             game.phase = "ENDED"
             await message.channel.send(embed=embed, view=SpyfallPostGameView(game))
