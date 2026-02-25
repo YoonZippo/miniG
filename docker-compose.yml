@@ -1,0 +1,13 @@
+services:
+  liar-bot:
+    build: .
+    container_name: discord-liar-bot
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    # 봇 토큰은 환경 변수로 주입합니다. docker-compose.yml에 직접 적는 것 보다 .env 파일을 활용하는 것이 안전합니다.
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+    # .env 파일이 같은 폴더에 있다면 환경 변수를 여기서 읽어옵니다.
+    env_file:
+      - .env
