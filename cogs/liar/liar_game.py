@@ -121,8 +121,8 @@ class CategorySelect(discord.ui.Select):
             discord.SelectOption(label="장소", description="특정 장소 카테고리", emoji="🏫"),
             discord.SelectOption(label="직업", description="다양한 직업 카테고리", emoji="👮"),
             discord.SelectOption(label="동물", description="동물 카테고리", emoji="🐶"),
-            discord.SelectOption(label="물건 (신규)", description="우리 주변의 다양한 물건들", emoji="📦"),
-            discord.SelectOption(label="취미/스포츠 (신규)", description="취미 및 스포츠 관련 활동", emoji="⚽")
+            discord.SelectOption(label="물건", description="우리 주변의 다양한 물건들", emoji="📦"),
+            discord.SelectOption(label="취미/스포츠", description="취미 및 스포츠 관련 활동", emoji="⚽")
         ]
         super().__init__(placeholder="카테고리를 선택하세요...", options=options, custom_id="category_select")
 
