@@ -50,7 +50,7 @@ class MainMenuView(discord.ui.View):
     @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+            with open('../CHANGELOG.md', 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
             # 최신 업데이트 블록만 추출 (첫 번째 ### 부터 다음 ### 전까지)

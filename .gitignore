@@ -11,7 +11,13 @@ ENV/
 
 # Environment Variables
 .env
-.env.*
+gameBot/.env
+musicBot/.env
+
+# Databases
+*.db
+gameBot/database/*.db
+musicBot/*.db
 
 # OS generated files
 .DS_Store
