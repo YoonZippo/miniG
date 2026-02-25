@@ -10,12 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 파이썬 의존성 파일 복사 및 설치
-COPY gameBot/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 현재 폴더의 모든 파일을 도커 컨테이너 내부로 복사
-COPY gameBot/ .
-COPY CHANGELOG.md .
+COPY . .
 
 # 컨테이너가 실행될 때 기본으로 실행될 명령어
 CMD ["python", "main.py"]
