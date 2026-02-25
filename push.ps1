@@ -1,14 +1,12 @@
-# Windows용 푸시 스크립트 (push.ps1)
-# 사용법: .\push.ps1
+# push.ps1 for Windows
+# Usage: .\push.ps1
 
-# 한글 출력을 위해 출력 인코딩 설정
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
-$msg = Read-Host -Prompt "커밋 메시지를 입력하세요 (엔터 시 'Self Update')"
+$msg = Read-Host -Prompt "Enter 'commit' (Empty for 'Self Update')"
 if (-not $msg) { $msg = "Self Update" }
 
 git add .
 git commit -m $msg
 git push origin main
 
-Write-Host "`n✅ GitHub 업로드 성공! 서버에서 ./update.sh를 실행하세요." -ForegroundColor Green
+Write-Host "`n[SUCCESS] Local changes pushed to GitHub." -ForegroundColor Green
+Write-Host "Now run ./update.sh on your GCE server."
