@@ -62,11 +62,25 @@ sudo docker-compose up -d --build
 -   `-d`: 백그라운드 실행 (SSH를 꺼도 봇이 유지됩니다.)
 -   `--build`: 최신 코드로 다시 빌드
 
-## 5. 업데이트 방법
+## 6. 딸깍! 자동 배포 스크립트 사용법
 
-로컬에서 코드를 수정하여 GitHub에 `push`한 경우, 서버에서는 다음만 실행하면 됩니다.
+직접 코드를 수정한 후 배포할 때, 매번 긴 명령어를 입력할 필요 없이 아래 스크립트를 사용하세요.
 
-```bash
-git pull origin main
-sudo docker-compose up -d --build
-```
+### 💻 로컬 PC (Windows)
+1. 코드를 수정합니다.
+2. 터미널(PowerShell)에서 다음을 실행합니다:
+   ```powershell
+   .\push.ps1
+   ```
+3. 커밋 메시지를 입력하면 자동으로 GitHub에 업로드됩니다.
+
+### ☁️ 구글 VM 서버 (Linux)
+1. SSH로 서버에 접속합니다.
+2. 처음 한 번만 권한 설정을 해줍니다:
+   ```bash
+   chmod +x update.sh
+   ```
+3. 이제 업데이트할 때마다 다음만 입력하면 끝입니다:
+   ```bash
+   ./update.sh
+   ```
