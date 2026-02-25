@@ -1,6 +1,9 @@
 # Windows용 푸시 스크립트 (push.ps1)
 # 사용법: .\push.ps1
 
+# 한글 출력을 위해 출력 인코딩 설정
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $msg = Read-Host -Prompt "커밋 메시지를 입력하세요 (엔터 시 'Self Update')"
 if (-not $msg) { $msg = "Self Update" }
 
