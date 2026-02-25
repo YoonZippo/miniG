@@ -47,6 +47,22 @@ class MainMenuView(discord.ui.View):
         from cogs.spyfall.spyfall import start_spyfall_ui
         await start_spyfall_ui(interaction)
 
+    @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
+    async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 너무 길면 임베드 제한에 걸릴 수 있으므로 최근 내용 위주로 표시
+            embed = discord.Embed(
+                title="📋 miniG 업데이트 기록",
+                description=content[:2000],  # 간단하게 2000자 제한
+                color=0x3498db
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"업데이트 기록을 불러오는 중 오류가 발생했습니다: {e}", ephemeral=True)
+
     @discord.ui.button(label="준비 중인 게임", style=discord.ButtonStyle.secondary, custom_id="menu_other_game", disabled=True, emoji="🚧")
     async def other_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("아직 준비 중인 게임입니다.", ephemeral=True)

@@ -538,7 +538,9 @@ class LiarGameCog(commands.Cog):
         # 초기 임베드 생성
         embed = discord.Embed(
             title="🕵️ 라이어 게임 모집 중!", 
-            description="참가 버튼을 눌러 게임에 들어오세요.\n충분한 인원이 모이면 방장이 `게임 시작`을 누를 수 있습니다.", 
+            description="참가 버튼을 눌러 게임에 들어오세요.\n충분한 인원이 모이면 방장이 `게임 시작`을 누를 수 있습니다.\n\n"
+                        "📍 **현재 지원 카테고리:**\n"
+                        "🍔 음식, 🏫 장소, 👮 직업, 🐶 동물, 📦 물건, ⚽ 취미/스포츠", 
             color=0x2b2d31
         )
         embed.add_field(name=f"현재 참가자 (1명)", value=f"👑 {interaction.user.display_name}")
