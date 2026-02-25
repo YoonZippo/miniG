@@ -29,6 +29,27 @@ bot = MyBot()
 async def on_ready():
     print(f'{bot.user.name} 봇이 성공적으로 로그인했습니다!')
 
+class ChangelogView(discord.ui.View):
+    """전체 업데이트 내역을 보여주는 전용 뷰"""
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="전체 업데이트 기록 보기", style=discord.ButtonStyle.primary)
+    async def show_full_log(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 디스코드 임베드 글자수 제한(4096자)을 고려하여 출력
+            embed = discord.Embed(
+                title="📋 miniG 전체 업데이트 내역",
+                description=content[:4000], 
+                color=0x3498db
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"기록을 불러오는 중 오류가 발생했습니다: {e}", ephemeral=True)
+
 class MainMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -71,15 +92,8 @@ class MainMenuView(discord.ui.View):
                 color=0x3498db
             )
             
-            # 더보기 버튼 (깃허브 링크) 추가
-            view = discord.ui.View()
-            view.add_item(discord.ui.Button(
-                label="전체 업데이트 기록 보기", 
-                url="https://github.com/YoonZippo/miniG/blob/main/CHANGELOG.md",
-                style=discord.ButtonStyle.link
-            ))
-            
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            # 깃허브 링크 대신 내부 뷰(ChangelogView)를 사용하여 전체 기록 보기 제공
+            await interaction.response.send_message(embed=embed, view=ChangelogView(), ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"업데이트 기록을 불러오는 중 오류가 발생했습니다: {e}", ephemeral=True)
 
