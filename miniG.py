@@ -51,15 +51,35 @@ class MainMenuView(discord.ui.View):
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
-                content = f.read()
+                lines = f.readlines()
             
-            # 너무 길면 임베드 제한에 걸릴 수 있으므로 최근 내용 위주로 표시
+            # 최신 업데이트 블록만 추출 (첫 번째 ### 부터 다음 ### 전까지)
+            latest_content = ""
+            capture = False
+            for line in lines:
+                if line.startswith('###'):
+                    if not capture:
+                        capture = True
+                    else:
+                        break # 두 번째 ###를 만나면 중단
+                if capture:
+                    latest_content += line
+            
             embed = discord.Embed(
-                title="📋 miniG 업데이트 기록",
-                description=content[:2000],  # 간단하게 2000자 제한
+                title="🆕 최신 업데이트 소식",
+                description=latest_content or "기록된 업데이트 내용이 없습니다.",
                 color=0x3498db
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            
+            # 더보기 버튼 (깃허브 링크) 추가
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label="전체 업데이트 기록 보기", 
+                url="https://github.com/YoonZippo/miniG/blob/main/CHANGELOG.md",
+                style=discord.ButtonStyle.link
+            ))
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"업데이트 기록을 불러오는 중 오류가 발생했습니다: {e}", ephemeral=True)
 
