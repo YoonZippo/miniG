@@ -33,7 +33,7 @@ class MainMenuView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="라이어 게임", style=discord.ButtonStyle.primary, custom_id="menu_liar_game", emoji="🕵️")
+    @discord.ui.button(label="라이어 게임(3인~)", style=discord.ButtonStyle.primary, custom_id="menu_liar_game", emoji="🕵️")
     async def liar_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # cogs.liar_game 모듈에서 봇을 통해 게임 시작 함수를 호출합니다.
         liar_cog = bot.get_cog("LiarGameCog")
@@ -42,7 +42,7 @@ class MainMenuView(discord.ui.View):
         else:
             await interaction.response.send_message("라이어 게임 시스템을 불러올 수 없습니다!", ephemeral=True)
 
-    @discord.ui.button(label="스파이폴", style=discord.ButtonStyle.danger, custom_id="menu_spyfall_game", emoji="🕵️‍♂️")
+    @discord.ui.button(label="스파이폴(3인~7인)", style=discord.ButtonStyle.danger, custom_id="menu_spyfall_game", emoji="🕵️‍♂️")
     async def spyfall_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         from cogs.spyfall.spyfall import start_spyfall_ui
         await start_spyfall_ui(interaction)
