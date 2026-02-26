@@ -5,7 +5,7 @@ from discord import app_commands
 from typing import Dict, List
 import random
 import asyncio
-from collections import Counter
+from collections import Counter, deque
 from database.manager import DatabaseManager
 
 logger = logging.getLogger('gameBot.liar')
@@ -13,6 +13,8 @@ logger = logging.getLogger('gameBot.liar')
 db = DatabaseManager()
 # 현재 채널별로 진행 중인 게임 상태를 저장할 딕셔너리
 active_games: Dict[int, 'LiarGame'] = {}
+# 최근 사용된 제시어 50개 추적
+recent_words = deque(maxlen=50)
 
 async def cleanup_game(interaction: discord.Interaction, channel_id: int):
     """현재 채널의 진행 중인 게임과 음성 연결을 안전하게 종료하는 헬퍼 함수"""
@@ -194,13 +196,25 @@ class CategorySelect(discord.ui.Select):
         self.game.category = self.values[0]
         
         category_words = NORMAL_WORDS[self.game.category]
+        
+        # 최근 50번 이내에 나오지 않았던 단어만 필터링 (가용 단어 부족 시 롤백 방지)
+        available_words = [w for w in category_words if w not in recent_words]
+        
         if self.game.game_mode == "IDIOT":
-            # 같은 카테고리 안에서 무작위로 서로 다른 2개의 단어를 추출 (시민용, 라이어용)
-            sampled = random.sample(category_words, 2)
+            if len(available_words) >= 2:
+                sampled = random.sample(available_words, 2)
+            else:
+                sampled = random.sample(category_words, 2) # 필터링 된 단어가 부족하면 전체에서 무작위 추출
             self.game.word = sampled[0]
             self.game.liar_word = sampled[1]
+            recent_words.append(self.game.word)
+            recent_words.append(self.game.liar_word)
         else:
-            self.game.word = random.choice(category_words)
+            if len(available_words) >= 1:
+                self.game.word = random.choice(available_words)
+            else:
+                self.game.word = random.choice(category_words) # 필터링 된 단어가 부족하면 전체에서 무작위 추출
+            recent_words.append(self.game.word)
 
         # 2. 역할 분배 (라이어 1명 랜덤 선정)
         self.game.liar = random.choice(self.game.players)
