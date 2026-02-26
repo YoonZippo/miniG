@@ -44,6 +44,9 @@ class LiarGame:
         self.turn_limit: int = 20 # 기본 턴 제한시간 (초)
         self.vote_limit: int = 30 # 기본 투표 제한시간 (초)
         self.timer_task: asyncio.Task = None # 턴 제한시간 타이머 태스크
+        
+        self.final_target: discord.Member = None
+        self.hints_log: list = []
 
 class TimerSettingModal(discord.ui.Modal, title="제한시간 설정"):
     def __init__(self, game: LiarGame, view: discord.ui.View):
@@ -489,6 +492,7 @@ async def process_final_vote(game, message_obj, interaction=None):
     if not top_voted_player and getattr(game, 'cog', None):
         top_voted_player = await game.cog.bot.fetch_user(top_voted_id)
 
+    game.final_target = top_voted_player
     game.phase = "FINAL_DEFENSE"
     embed = discord.Embed(
         title="🗣️ 최후의 변론",
@@ -536,6 +540,7 @@ async def process_tiebreaker_vote(game, message_obj, tied_players, interaction=N
     if not top_voted_player and getattr(game, 'cog', None):
         top_voted_player = await game.cog.bot.fetch_user(top_voted_id)
         
+    game.final_target = top_voted_player
     game.phase = "FINAL_DEFENSE"
     embed = discord.Embed(
         title="🗣️ 최후의 변론",
@@ -653,7 +658,16 @@ class LiarGameCog(commands.Cog):
             else:
                 game.phase = "VOTING_FINAL"
                 view = FinalVoteView(game)
-                msg = await channel.send("두 바퀴가 모두 종료되었습니다! 이제 라이어로 의심되는 사람을 투표해주세요.", view=view)
+                
+                hints_str = "\n".join(game.hints_log) if game.hints_log else "기록된 단서가 없습니다."
+                embed = discord.Embed(
+                    title="⚖️ 최종 투표: 라이어를 잡아라!",
+                    description="두 바퀴가 모두 종료되었습니다! 아래 단서들을 참고하여 라이어로 의심되는 사람을 골라주세요.",
+                    color=0xf1c40f
+                )
+                embed.add_field(name="📜 그동안의 단서 기록", value=hints_str, inline=False)
+                
+                msg = await channel.send(embed=embed, view=view)
                 view.message = msg
         else:
             # 턴이 남았다면 다음 플레이어 호출 및 타이머 재시작
@@ -714,9 +728,10 @@ class LiarGameCog(commands.Cog):
 
         # 최후의 변론 처리
         if game.phase == "FINAL_DEFENSE":
-            # 변론할 수 있는 사람을 특정하기가 구조적으로 까다롭지만,
-            # 앞서 timer_task를 돌리는 시점에서 target을 캐치 중입니다.
-            # 방어적으로 단순 처리
+            # 변론 타겟 본인의 채팅만 허용
+            if message.author != game.final_target:
+                return
+                
             if getattr(game, 'timer_task', None):
                 game.timer_task.cancel()
                 
@@ -730,7 +745,7 @@ class LiarGameCog(commands.Cog):
             except discord.Forbidden: pass
             
             await message.channel.send(embed=embed)
-            await self.trigger_kill_save_vote(game, message.author)
+            await self.trigger_kill_save_vote(game, game.final_target)
             return
 
         # 게임 진행 중(발언 단계)이 아닌 경우 무시
@@ -741,6 +756,9 @@ class LiarGameCog(commands.Cog):
         current_player = game.turn_order[game.current_turn_index]
         if message.author != current_player:
             return
+
+        # 힌트 로그 저장
+        game.hints_log.append(f"**{message.author.display_name}**: {message.content}")
 
         # 메시지 텍스트 강조 Embed 생성
         embed = discord.Embed(description=f"🗣️ **{message.content}**", color=0x3498db)
