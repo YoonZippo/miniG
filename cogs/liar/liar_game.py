@@ -42,7 +42,45 @@ class LiarGame:
         self.phase: str = "LOBBY" # 게임 단계: LOBBY, PLAYING, VOTING, RESOLUTION
         self.votes: Dict[discord.Member, int] = {}
         self.turn_limit: int = 20 # 기본 턴 제한시간 (초)
+        self.vote_limit: int = 30 # 기본 투표 제한시간 (초)
         self.timer_task: asyncio.Task = None # 턴 제한시간 타이머 태스크
+
+class TimerSettingModal(discord.ui.Modal, title="제한시간 설정"):
+    def __init__(self, game: LiarGame, view: discord.ui.View):
+        super().__init__()
+        self.game = game
+        self.lobby_view = view
+
+        self.turn_time = discord.ui.TextInput(
+            label="발언 제한시간 (초)",
+            default=str(game.turn_limit),
+            placeholder="숫자만 입력 (최소 5)",
+            min_length=1,
+            max_length=3
+        )
+        self.add_item(self.turn_time)
+
+        self.vote_time = discord.ui.TextInput(
+            label="투표 제한시간 (초)",
+            default=str(game.vote_limit),
+            placeholder="숫자만 입력 (최소 5)",
+            min_length=1,
+            max_length=3
+        )
+        self.add_item(self.vote_time)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            new_turn = int(self.turn_time.value)
+            new_vote = int(self.vote_time.value)
+            if new_turn < 5 or new_vote < 5:
+                await interaction.response.send_message("제한시간은 최소 5초 이상이어야 합니다.", ephemeral=True)
+                return
+            self.game.turn_limit = new_turn
+            self.game.vote_limit = new_vote
+            await self.lobby_view.update_lobby(interaction)
+        except ValueError:
+            await interaction.response.send_message("올바른 숫자를 입력해주세요.", ephemeral=True)
 
 class LobbyView(discord.ui.View):
     """참가자를 모집하는 로비 뷰 (버튼 포함)"""
@@ -86,12 +124,7 @@ class LobbyView(discord.ui.View):
             await interaction.response.send_message("방장만 제한시간을 변경할 수 있습니다!", ephemeral=True)
             return
         
-        # 순환: 15 -> 20 -> 30 -> 15
-        if self.game.turn_limit == 15: self.game.turn_limit = 20
-        elif self.game.turn_limit == 20: self.game.turn_limit = 30
-        else: self.game.turn_limit = 15
-        
-        await self.update_lobby(interaction)
+        await interaction.response.send_modal(TimerSettingModal(self.game, self))
 
     @discord.ui.button(label="강제 중단", style=discord.ButtonStyle.danger, custom_id="cancel_game")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -114,7 +147,7 @@ class LobbyView(discord.ui.View):
         # 로비 임베드 메시지 업데이트
         embed = discord.Embed(
             title="🕵️ 라이어 게임 모집 중!", 
-            description=f"참가 버튼을 눌러 게임에 들어오세요.\n\n⏱️ **현재 설정된 턴 제한시간:** {self.game.turn_limit}초", 
+            description=f"참가 버튼을 눌러 게임에 들어오세요.\n\n⏱️ **현재 설정된 시간:** 발언 {self.game.turn_limit}초 / 투표 {self.game.vote_limit}초", 
             color=0x2b2d31
         )
         players_str = "\n".join([f"👤 {p.display_name}" for p in self.game.players])
@@ -148,7 +181,8 @@ class CategorySelect(discord.ui.Select):
             discord.SelectOption(label="직업", description="다양한 직업 카테고리", emoji="👮"),
             discord.SelectOption(label="동물", description="동물 카테고리", emoji="🐶"),
             discord.SelectOption(label="물건", description="우리 주변의 다양한 물건들", emoji="📦"),
-            discord.SelectOption(label="취미/스포츠", description="취미 및 스포츠 관련 활동", emoji="⚽")
+            discord.SelectOption(label="취미/스포츠", description="취미 및 스포츠 관련 활동", emoji="⚽"),
+            discord.SelectOption(label="애니메이션", description="인기 애니메이션 카테고리", emoji="📺")
         ]
         super().__init__(placeholder="카테고리를 선택하세요...", options=options, custom_id="category_select")
 
@@ -214,46 +248,62 @@ class CategoryView(discord.ui.View):
 
 class ExtensionVoteView(discord.ui.View):
     """모든 발언이 한 바퀴 돌았을 때 연장 여부를 투표하는 뷰"""
-    def __init__(self, game: LiarGame):
-        super().__init__(timeout=None)
+    def __init__(self, game):
+        super().__init__(timeout=game.vote_limit)
         self.game = game
         self.yes_votes = set()
         self.no_votes = set()
         self.voted = set()
+        self.message = None
 
-    async def check_votes(self, interaction: discord.Interaction):
-        # 모든 플레이어가 투표했는지 확인
-        if len(self.voted) >= len(self.game.players):
-            if len(self.yes_votes) >= len(self.no_votes): # 과반수 또는 동점일 경우 찬성으로 간주
+    async def on_timeout(self):
+        await self.check_votes()
+
+    async def check_votes(self, interaction: discord.Interaction = None):
+        total_players = len(self.game.players)
+        yes_threshold = (total_players + 1) // 2
+        no_threshold = total_players // 2 + 1
+        
+        is_finished = interaction is None # timeout means finished
+        if len(self.yes_votes) >= yes_threshold: is_finished = True
+        elif len(self.no_votes) >= no_threshold: is_finished = True
+        elif len(self.voted) >= total_players: is_finished = True
+            
+        if is_finished:
+            for item in self.children: item.disabled = True
+            if interaction:
+                await interaction.message.edit(view=self)
+            elif self.message:
+                try: await self.message.edit(view=self)
+                except: pass
+            
+            self.stop()
+            
+            if len(self.yes_votes) >= len(self.no_votes):
                 self.game.round_count += 1
                 self.game.current_turn_index = 0
                 self.game.phase = "PLAYING"
                 
                 current_player = self.game.turn_order[0]
-                await interaction.channel.send(
+                channel = interaction.channel if interaction else self.game.channel
+                await channel.send(
                     f"✅ 연장 투표가 가결되었습니다! 두 번째 라운드를 시작합니다.\n👉 첫 번째 차례: {current_player.mention} 님, 설명해주세요! (제한시간: {self.game.turn_limit}초)"
                 )
-                # 타이머 재시작
-                liar_cog = interaction.client.get_cog("LiarGameCog")
-                if liar_cog:
+                if getattr(self.game, 'cog', None):
                     if self.game.timer_task: self.game.timer_task.cancel()
-                    self.game.timer_task = asyncio.create_task(liar_cog.turn_timer(self.game))
+                    self.game.timer_task = asyncio.create_task(self.game.cog.turn_timer(self.game))
             else:
                 self.game.phase = "VOTING_FINAL"
                 view = FinalVoteView(self.game)
-                await interaction.channel.send("❌ 연장 투표가 부결되었습니다. 바로 라이어 지목 투표를 시작합니다!", view=view)
-            
-            # 투표 버튼 비활성화
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(view=self)
+                channel = interaction.channel if interaction else self.game.channel
+                text = "❌ 연장 투표가 부결되었습니다. 바로 라이어 지목 투표를 시작합니다!" if interaction else "⏱️ 시간 초과! 과반수 반대가 아니므로(또는 기권) 바로 라이어 투표를 시작합니다."
+                msg = await channel.send(text, view=view)
+                view.message = msg
 
     @discord.ui.button(label="한 바퀴 더! (찬성)", style=discord.ButtonStyle.success, custom_id="ext_yes")
     async def vote_yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user not in self.game.players or interaction.user in self.voted:
-            await interaction.response.send_message("투표 권한이 없거나 이미 투표하셨습니다.", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("투표 권한이 없거나 이미 투표하셨습니다.", ephemeral=True)
         self.voted.add(interaction.user)
         self.yes_votes.add(interaction.user)
         await interaction.response.send_message("찬성에 투표하셨습니다.", ephemeral=True)
@@ -262,45 +312,250 @@ class ExtensionVoteView(discord.ui.View):
     @discord.ui.button(label="바로 투표 (반대)", style=discord.ButtonStyle.danger, custom_id="ext_no")
     async def vote_no(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user not in self.game.players or interaction.user in self.voted:
-            await interaction.response.send_message("투표 권한이 없거나 이미 투표하셨습니다.", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("투표 권한이 없거나 이미 투표하셨습니다.", ephemeral=True)
         self.voted.add(interaction.user)
         self.no_votes.add(interaction.user)
         await interaction.response.send_message("반대에 투표하셨습니다.", ephemeral=True)
         await self.check_votes(interaction)
 
 class FinalVoteSelect(discord.ui.Select):
-    """라이어를 지목하기 위한 선택 메뉴"""
-    def __init__(self, game: LiarGame):
+    def __init__(self, game):
         self.game = game
-        options = [
-            discord.SelectOption(label=p.display_name, value=str(p.id)) 
-            for p in game.players
-        ]
+        options = [discord.SelectOption(label=p.display_name, value=str(p.id)) for p in game.players]
         super().__init__(placeholder="가장 의심되는 라이어를 선택하세요...", options=options, custom_id="final_vote_select")
         
     async def callback(self, interaction: discord.Interaction):
         if interaction.user not in self.game.players:
-            await interaction.response.send_message("투표 권한이 없습니다.", ephemeral=True)
-            return
+            return await interaction.response.send_message("투표 권한이 없습니다.", ephemeral=True)
             
         target_id = int(self.values[0])
         self.game.votes[interaction.user] = target_id
-        await interaction.response.send_message(f"투표가 완료되었습니다.", ephemeral=True)
+        await interaction.response.send_message("투표가 완료되었습니다.", ephemeral=True)
         
-        # 모든 플레이어가 투표를 마쳤다면 결과 처리
         if len(self.game.votes) >= len(self.game.players):
-            await process_final_vote(self.game, interaction)
+            self.view.stop()
+            await process_final_vote(self.game, self.view.message, interaction)
 
 class FinalVoteView(discord.ui.View):
-    """최종 라이어 지목 뷰"""
-    def __init__(self, game: LiarGame):
-        super().__init__(timeout=None)
+    def __init__(self, game):
+        super().__init__(timeout=game.vote_limit)
+        self.game = game
+        self.message = None
         self.add_item(FinalVoteSelect(game))
+        
+    async def on_timeout(self):
+        # 시간 초과 시 남은 건 랜덤 투표가 아니라 그냥 기권 처리 후 결과 확인
+        self.stop()
+        await process_final_vote(self.game, self.message, None)
 
-        # Removed LiarGuessModal as it is now handled via chat input
+class TiebreakerVoteSelect(discord.ui.Select):
+    def __init__(self, game, tied_players):
+        self.game = game
+        self.tied_players = tied_players
+        self.game.votes = {}
+        options = [discord.SelectOption(label=p.display_name, value=str(p.id)) for p in tied_players]
+        super().__init__(placeholder="결선 투표: 라이어를 다시 선택하세요...", options=options, custom_id="tiebreaker_vote_select")
+        
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user not in self.game.players:
+            return await interaction.response.send_message("투표 권한이 없습니다.", ephemeral=True)
+            
+        target_id = int(self.values[0])
+        self.game.votes[interaction.user] = target_id
+        await interaction.response.send_message("결선 투표가 완료되었습니다.", ephemeral=True)
+        
+        if len(self.game.votes) >= len(self.game.players):
+            self.view.stop()
+            await process_tiebreaker_vote(self.game, self.view.message, self.tied_players, interaction)
 
+class TiebreakerVoteView(discord.ui.View):
+    def __init__(self, game, tied_players):
+        super().__init__(timeout=game.vote_limit)
+        self.game = game
+        self.message = None
+        self.tied_players = tied_players
+        self.add_item(TiebreakerVoteSelect(game, tied_players))
+        
+    async def on_timeout(self):
+        self.stop()
+        await process_tiebreaker_vote(self.game, self.message, self.tied_players, None)
+
+class KillSaveVoteView(discord.ui.View):
+    """특정 플레이어를 죽일지 살릴지 결정하는 뷰"""
+    def __init__(self, game, target: discord.Member):
+        super().__init__(timeout=game.vote_limit)
+        self.game = game
+        self.target = target
+        self.kill_votes = set()
+        self.save_votes = set()
+        self.voted = set()
+        self.message = None
+
+    async def on_timeout(self):
+        await self.check_votes(None)
+
+    async def check_votes(self, interaction: discord.Interaction = None):
+        total_players = len(self.game.players)
+        eligible_players = total_players - 1 # 본인 제외
+        
+        is_finished = interaction is None
+        kill_threshold = eligible_players // 2 + 1
+        save_threshold = eligible_players // 2 + 1 if eligible_players % 2 != 0 else eligible_players // 2
+        
+        if len(self.kill_votes) >= kill_threshold: is_finished = True
+        elif len(self.save_votes) >= save_threshold: is_finished = True
+        elif len(self.voted) >= eligible_players: is_finished = True
+            
+        if is_finished:
+            for item in self.children: item.disabled = True
+            if interaction: await interaction.message.edit(view=self)
+            elif self.message: 
+                try: await self.message.edit(view=self)
+                except: pass
+            self.stop()
+                
+            channel = interaction.channel if interaction else self.game.channel
+            if len(self.kill_votes) > len(self.save_votes):
+                await execute_player(self.game, self.target, channel)
+            else:
+                await channel.send(f"🛡️ {self.target.mention} 님이 과반수 찬성(또는 동점)을 얻지 못해 살아남았습니다! 재투표를 진행합니다.")
+                self.game.phase = "VOTING_FINAL"
+                self.game.votes = {}
+                view = FinalVoteView(self.game)
+                msg = await channel.send("다시 라이어로 의심되는 사람을 투표해주세요.", view=view)
+                view.message = msg
+
+    @discord.ui.button(label="처형 (찬성)", style=discord.ButtonStyle.danger, custom_id="ks_kill")
+    async def vote_kill(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user not in self.game.players or interaction.user in self.voted:
+            return await interaction.response.send_message("권한이 없거나 이미 투표했습니다.", ephemeral=True)
+        if interaction.user == self.target:
+            return await interaction.response.send_message("본인에 대한 투표에는 참여할 수 없습니다.", ephemeral=True)
+        self.voted.add(interaction.user)
+        self.kill_votes.add(interaction.user)
+        await interaction.response.send_message("처형에 투표했습니다.", ephemeral=True)
+        await self.check_votes(interaction)
+
+    @discord.ui.button(label="무죄 (반대)", style=discord.ButtonStyle.success, custom_id="ks_save")
+    async def vote_save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user not in self.game.players or interaction.user in self.voted:
+            return await interaction.response.send_message("권한이 없거나 이미 투표했습니다.", ephemeral=True)
+        if interaction.user == self.target:
+            return await interaction.response.send_message("본인에 대한 투표에는 참여할 수 없습니다.", ephemeral=True)
+        self.voted.add(interaction.user)
+        self.save_votes.add(interaction.user)
+        await interaction.response.send_message("무죄에 투표했습니다.", ephemeral=True)
+        await self.check_votes(interaction)
+
+async def process_final_vote(game, message_obj, interaction=None):
+    game.phase = "RESOLUTION"
+    if message_obj: 
+        try: await message_obj.edit(view=None)
+        except: pass
+    
+    vote_counts = Counter(list(game.votes.values()))
+    if not vote_counts:
+        channel = interaction.channel if interaction else game.channel
+        await channel.send("⚠️ 아무도 투표하지 않아 라이어 판별을 건너뜁니다! (라이어 승리)")
+        return await execute_player(game, game.liar, channel, force_fail=True)
+
+    max_votes = max(vote_counts.values())
+    max_voted_ids = [uid for uid, count in vote_counts.items() if count == max_votes]
+    channel = interaction.channel if interaction else game.channel
+    
+    result_text = "📊 **최종 투표 결과**\n"
+    for player in game.players:
+        count = list(game.votes.values()).count(player.id)
+        result_text += f"- {player.display_name}: {count}표\n"
+    await channel.send(result_text)
+    
+    if len(max_voted_ids) > 1:
+        tied_players = [p for p in game.players if p.id in max_voted_ids]
+        embed = discord.Embed(
+            title="⚠️ 투표 동점자 발생! 결선 투표 진행",
+            description="가장 많은 표를 받은 동점자들을 대상으로 다시 한번 투표를 진행합니다.",
+            color=0xf1c40f
+        )
+        game.phase = "TIEBREAKER_VOTE"
+        embed.add_field(name="결선 투표 후보", value=", ".join(p.mention for p in tied_players))
+        
+        view = TiebreakerVoteView(game, tied_players)
+        msg = await channel.send(embed=embed, view=view)
+        view.message = msg
+        return
+        
+    top_voted_id = max_voted_ids[0]
+    top_voted_player = channel.guild.get_member(top_voted_id)
+    if not top_voted_player and getattr(game, 'cog', None):
+        top_voted_player = await game.cog.bot.fetch_user(top_voted_id)
+
+    # Kill or Save vote
+    embed = discord.Embed(
+        title="⚖️ 최후의 심판대",
+        description=f"가장 많은 표를 받은 {top_voted_player.mention} 님이 심판대에 올랐습니다.\n이 플레이어를 처형하시겠습니까?",
+        color=0xe67e22
+    )
+    game.phase = "KILL_SAVE_VOTE"
+    view = KillSaveVoteView(game, top_voted_player)
+    msg = await channel.send(embed=embed, view=view)
+    view.message = msg
+
+async def process_tiebreaker_vote(game, message_obj, tied_players, interaction=None):
+    game.phase = "RESOLUTION"
+    if message_obj: 
+        try: await message_obj.edit(view=None)
+        except: pass
+    
+    vote_counts = Counter(list(game.votes.values()))
+    channel = interaction.channel if interaction else game.channel
+    
+    result_text = "📊 **결선 투표 결과**\n"
+    for player in tied_players:
+        count = list(game.votes.values()).count(player.id)
+        result_text += f"- {player.display_name}: {count}표\n"
+    await channel.send(result_text)
+    
+    if not vote_counts:
+        await channel.send("⚠️ 아무도 투표하지 않아 라이어 판별을 건너뜁니다! (라이어 승리)")
+        return await execute_player(game, game.liar, channel, force_fail=True)
+
+    max_votes = max(vote_counts.values())
+    max_voted_ids = [uid for uid, count in vote_counts.items() if count == max_votes]
+    
+    if len(max_voted_ids) > 1:
+        embed = discord.Embed(title="🚨 2차 투표 무효! 라이어 검거 실패!", description=f"결선 투표에서도 동점자가 발생하여 시민들이 합의에 도달하지 못했습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
+        from database.manager import DatabaseManager
+        db = DatabaseManager()
+        for p in game.players: db.update_stats(p.id, 'liar', won=(p == game.liar))
+        await channel.send(embed=embed, view=PostGameView(game))
+        return
+        
+    top_voted_id = max_voted_ids[0]
+    top_voted_player = channel.guild.get_member(top_voted_id)
+    if not top_voted_player and getattr(game, 'cog', None):
+        top_voted_player = await game.cog.bot.fetch_user(top_voted_id)
+        
+    embed = discord.Embed(
+        title="⚖️ 최후의 심판대",
+        description=f"가장 많은 표를 받은 {top_voted_player.mention} 님이 심판대에 올랐습니다.\n이 플레이어를 처형하시겠습니까?",
+        color=0xe67e22
+    )
+    game.phase = "KILL_SAVE_VOTE"
+    view = KillSaveVoteView(game, top_voted_player)
+    msg = await channel.send(embed=embed, view=view)
+    view.message = msg
+
+async def execute_player(game, target, channel, force_fail=False):
+    from database.manager import DatabaseManager
+    db = DatabaseManager()
+    if target.id == game.liar.id and not force_fail:
+        embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"처형된 {target.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. {'바보 ' if game.game_mode == 'IDIOT' else ''}라이어에게도 역전의 기회가 있습니다! ({'바보 ' if game.game_mode == 'IDIOT' else ''}라이어 제시어: **{game.liar_word if game.game_mode == 'IDIOT' else '비밀'}**)\n\n👉 **{target.mention} 님, 지금 바로 채팅창에 '시민들의 진짜 제시어'를 유추해서 입력해주세요!**", color=0x3498db)
+        game.phase = "LIAR_GUESS"
+        await channel.send(embed=embed)
+    else:
+        embed = discord.Embed(title="🚨 라이어 검거 실패!", description=f"{'처형된 '+target.mention+' 님은 선량한 시민이었습니다!' if not force_fail else '라이어를 검거하지 못했습니다.'}\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
+        for p in game.players: db.update_stats(p.id, 'liar', won=(p == game.liar))
+        await channel.send(embed=embed, view=PostGameView(game))
 class PostGameView(discord.ui.View):
     """게임 종료 후 다시하기 또는 종료를 선택하는 뷰"""
     def __init__(self, game: LiarGame):
@@ -334,7 +589,6 @@ class PostGameView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
         
-        from cogs.liar_game import LobbyView
         await interaction.channel.send(embed=embed, view=LobbyView(self.game))
 
     @discord.ui.button(label="게임 완전히 종료", style=discord.ButtonStyle.danger, custom_id="end_game_completely")
@@ -394,11 +648,9 @@ async def process_final_vote(game: LiarGame, interaction: discord.Interaction):
     
     if top_voted_id == game.liar.id:
         if game.game_mode == "IDIOT":
-            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n바보 라이어는 자신이 왜 라이어인지 아직도 모릅니다! (라이어 제시어: **{game.liar_word}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", color=0x00ff00)
-            await interaction.channel.send(embed=embed, view=PostGameView(game))
-            # 전적 기록: 시민 승리
-            for p in game.players:
-                db.update_stats(p.id, 'liar', won=(p != game.liar))
+            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 바보 라이어에게도 역전의 기회가 있습니다! (바보 라이어 제시어: **{game.liar_word}**)\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 '시민들의 진짜 제시어'를 유추해서 입력해주세요!**", color=0x3498db)
+            game.phase = "LIAR_GUESS"
+            await interaction.channel.send(embed=embed)
         else:
             # 라이어가 맞으면 직접 채팅을 칠 수 있도록 상태(phase) 변경
             embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 라이어에게는 최후의 변론으로 **제시어를 맞출 기회**가 주어집니다!\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 정답(제시어)을 입력해주세요!**", color=0x3498db)
@@ -476,11 +728,9 @@ async def process_tiebreaker_vote(game: LiarGame, interaction: discord.Interacti
     
     if top_voted_id == game.liar.id:
         if game.game_mode == "IDIOT":
-            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n바보 라이어는 자신이 왜 라이어인지 아직도 모릅니다! (라이어 제시어: **{game.liar_word}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", color=0x00ff00)
-            await interaction.channel.send(embed=embed, view=PostGameView(game))
-            # 전적 기록: 시민 승리
-            for p in game.players:
-                db.update_stats(p.id, 'liar', won=(p != game.liar))
+            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 바보 라이어에게도 역전의 기회가 있습니다! (바보 라이어 제시어: **{game.liar_word}**)\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 '시민들의 진짜 제시어'를 유추해서 입력해주세요!**", color=0x3498db)
+            game.phase = "LIAR_GUESS"
+            await interaction.channel.send(embed=embed)
         else:
             embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 라이어에게는 최후의 변론으로 **제시어를 맞출 기회**가 주어집니다!\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 정답(제시어)을 입력해주세요!**", color=0x3498db)
             game.phase = "LIAR_GUESS"
@@ -554,8 +804,12 @@ class LiarGameCog(commands.Cog):
             # 정답 비교 (공백을 제거하여 조금 더 너그럽게 판정)
             if user_guess.replace(" ", "") == game.word.replace(" ", ""):
                 embed = discord.Embed(title="🚨 라이어의 정답 확인!", description=f"라이어가 정답 **[{game.word}]** 을(를) 맞췄습니다!\n\n**🎉 라이어가 정체를 들키고도 승리했습니다! 🎉**", color=0xff0000)
+                for p in game.players:
+                    db.update_stats(p.id, 'liar', won=(p == game.liar))
             else:
                 embed = discord.Embed(title="🚨 라이어의 정답 확인!", description=f"라이어가 **오답**({user_guess})을(를) 입력했습니다! (정답: **{game.word}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", color=0x00ff00)
+                for p in game.players:
+                    db.update_stats(p.id, 'liar', won=(p != game.liar))
                 
             game.phase = "ENDED"
             await message.channel.send(embed=embed, view=PostGameView(game))
@@ -596,6 +850,7 @@ class LiarGameCog(commands.Cog):
 
         # 새 게임 인스턴스 생성 및 저장
         game = LiarGame(host=interaction.user, channel=interaction.channel)
+        game.cog = self
         active_games[interaction.channel_id] = game
 
         # 음성 채널 접속 시도
@@ -610,7 +865,7 @@ class LiarGameCog(commands.Cog):
             title="🕵️ 라이어 게임 모집 중!", 
             description="참가 버튼을 눌러 게임에 들어오세요.\n충분한 인원이 모이면 방장이 `게임 시작`을 누를 수 있습니다.\n\n"
                         "📍 **현재 지원 카테고리:**\n"
-                        "🍔 음식, 🏫 장소, 👮 직업, 🐶 동물, 📦 물건, ⚽ 취미/스포츠", 
+                        "🍔 음식, 🏫 장소, 👮 직업, 🐶 동물, 📦 물건, ⚽ 취미/스포츠, 📺 애니메이션", 
             color=0x2b2d31
         )
         embed.add_field(name=f"현재 참가자 (1명)", value=f"👑 {interaction.user.display_name}")

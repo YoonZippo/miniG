@@ -55,6 +55,11 @@ class StatsCog(commands.Cog):
         medals = ["🥇", "🥈", "🥉"]
         for i, (user_id, wins) in enumerate(liar_top):
             user = self.bot.get_user(user_id)
+            if not user:
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                except discord.NotFound:
+                    pass
             name = user.display_name if user else f"Unknown({user_id})"
             liar_text += f"{medals[i]} **{name}**: {wins}승\n"
         embed.add_field(name="🕵️ 최고의 라이어", value=liar_text or "데이터 부족", inline=False)
@@ -63,6 +68,11 @@ class StatsCog(commands.Cog):
         spyfall_text = ""
         for i, (user_id, wins) in enumerate(spyfall_top):
             user = self.bot.get_user(user_id)
+            if not user:
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                except discord.NotFound:
+                    pass
             name = user.display_name if user else f"Unknown({user_id})"
             spyfall_text += f"{medals[i]} **{name}**: {wins}승\n"
         embed.add_field(name="🕵️‍♂️ 최고의 스파이", value=spyfall_text or "데이터 부족", inline=False)
