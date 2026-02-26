@@ -616,142 +616,6 @@ class PostGameView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         await interaction.channel.send(embed=embed)
 
-async def process_final_vote(game: LiarGame, interaction: discord.Interaction):
-    game.phase = "RESOLUTION"
-    
-    # 이전 투표 메시지의 선택 메뉴 비활성화
-    await interaction.message.edit(view=None)
-    
-    # 각 플레이어가 받은 표 수를 계산
-    vote_counts = Counter(list(game.votes.values()))
-    max_votes = max(vote_counts.values()) if vote_counts else 0
-    max_voted_ids = [uid for uid, count in vote_counts.items() if count == max_votes]
-    
-    # 투표 결과 텍스트 생성
-    result_text = "📊 **최종 투표 결과**\n"
-    for player in game.players:
-        count = list(game.votes.values()).count(player.id)
-        result_text += f"- {player.display_name}: {count}표\n"
-        
-    await interaction.channel.send(result_text)
-    
-    # 최다 득표자가 여러 명(동점)인 경우 결선 투표 진행
-    if len(max_voted_ids) > 1:
-        tied_players = [p for p in game.players if p.id in max_voted_ids]
-        embed = discord.Embed(
-            title="⚠️ 투표 동점자 발생! 결선 투표 진행",
-            description="가장 많은 표를 받은 동점자들을 대상으로 다시 한번 투표를 진행합니다.",
-            color=0xf1c40f
-        )
-        game.phase = "TIEBREAKER_VOTE"
-        tied_players_mentions = ", ".join(p.mention for p in tied_players)
-        embed.add_field(name="결선 투표 후보", value=tied_players_mentions)
-        
-        await interaction.channel.send(embed=embed, view=TiebreakerVoteView(game, tied_players))
-        return
-        
-    top_voted_id = max_voted_ids[0]
-    
-    # 서버 캐시에서 멤버 객체 가져오기 시도
-    top_voted_player = interaction.guild.get_member(top_voted_id)
-    if not top_voted_player:
-        top_voted_player = await interaction.client.fetch_user(top_voted_id)
-    
-    if top_voted_id == game.liar.id:
-        if game.game_mode == "IDIOT":
-            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 바보 라이어에게도 역전의 기회가 있습니다! (바보 라이어 제시어: **{game.liar_word}**)\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 '시민들의 진짜 제시어'를 유추해서 입력해주세요!**", color=0x3498db)
-            game.phase = "LIAR_GUESS"
-            await interaction.channel.send(embed=embed)
-        else:
-            # 라이어가 맞으면 직접 채팅을 칠 수 있도록 상태(phase) 변경
-            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 라이어에게는 최후의 변론으로 **제시어를 맞출 기회**가 주어집니다!\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 정답(제시어)을 입력해주세요!**", color=0x3498db)
-            game.phase = "LIAR_GUESS"
-            await interaction.channel.send(embed=embed)
-    else:
-        embed = discord.Embed(title="🚨 라이어 검거 실패!", description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 선량한 시민이었습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
-        await interaction.channel.send(embed=embed, view=PostGameView(game))
-        # 전적 기록: 라이어 승리
-        for p in game.players:
-            db.update_stats(p.id, 'liar', won=(p == game.liar))
-
-class TiebreakerVoteSelect(discord.ui.Select):
-    """결선 투표용 선택 메뉴"""
-    def __init__(self, game: LiarGame, tied_players: List[discord.Member]):
-        self.game = game
-        self.tied_players = tied_players
-        # 기존 투표 데이터 초기화
-        self.game.votes = {}
-        
-        options = [
-            discord.SelectOption(label=p.display_name, value=str(p.id)) 
-            for p in tied_players
-        ]
-        super().__init__(placeholder="결선 투표: 라이어를 다시 선택하세요...", options=options, custom_id="tiebreaker_vote_select")
-        
-    async def callback(self, interaction: discord.Interaction):
-        if interaction.user not in self.game.players:
-            await interaction.response.send_message("투표 권한이 없습니다.", ephemeral=True)
-            return
-            
-        target_id = int(self.values[0])
-        self.game.votes[interaction.user] = target_id
-        await interaction.response.send_message("결선 투표가 완료되었습니다.", ephemeral=True)
-        
-        # 모든 플레이어가 투표를 마쳤다면 결과 처리
-        if len(self.game.votes) >= len(self.game.players):
-            await process_tiebreaker_vote(self.game, interaction, self.tied_players)
-
-class TiebreakerVoteView(discord.ui.View):
-    """최종 라이어 동점자 결선 투표 뷰"""
-    def __init__(self, game: LiarGame, tied_players: List[discord.Member]):
-        super().__init__(timeout=None)
-        self.add_item(TiebreakerVoteSelect(game, tied_players))
-
-async def process_tiebreaker_vote(game: LiarGame, interaction: discord.Interaction, tied_players: List[discord.Member]):
-    # 이전 투표 메시지의 선택 메뉴 비활성화
-    await interaction.message.edit(view=None)
-    
-    # 각 플레이어가 받은 표 수를 계산
-    vote_counts = Counter(list(game.votes.values()))
-    max_votes = max(vote_counts.values()) if vote_counts else 0
-    max_voted_ids = [uid for uid, count in vote_counts.items() if count == max_votes]
-    
-    # 결선 투표 결과 텍스트 생성
-    result_text = "📊 **결선 투표 결과**\n"
-    for player in tied_players:
-        count = list(game.votes.values()).count(player.id)
-        result_text += f"- {player.display_name}: {count}표\n"
-        
-    await interaction.channel.send(result_text)
-    
-    # 결선 투표에서도 동점인 경우 라이어의 최종 승리
-    if len(max_voted_ids) > 1:
-        embed = discord.Embed(title="🚨 2차 투표 무효! 라이어 검거 실패!", description=f"결선 투표에서도 동점자가 발생하여 시민들이 합의에 도달하지 못했습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
-        await interaction.channel.send(embed=embed, view=PostGameView(game))
-        return
-        
-    top_voted_id = max_voted_ids[0]
-    
-    # 서버 캐시에서 멤버 객체 가져오기 시도
-    top_voted_player = interaction.guild.get_member(top_voted_id)
-    if not top_voted_player:
-        top_voted_player = await interaction.client.fetch_user(top_voted_id)
-    
-    if top_voted_id == game.liar.id:
-        if game.game_mode == "IDIOT":
-            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 바보 라이어에게도 역전의 기회가 있습니다! (바보 라이어 제시어: **{game.liar_word}**)\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 '시민들의 진짜 제시어'를 유추해서 입력해주세요!**", color=0x3498db)
-            game.phase = "LIAR_GUESS"
-            await interaction.channel.send(embed=embed)
-        else:
-            embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 라이어에게는 최후의 변론으로 **제시어를 맞출 기회**가 주어집니다!\n\n👉 **{top_voted_player.mention} 님, 지금 바로 채팅창에 정답(제시어)을 입력해주세요!**", color=0x3498db)
-            game.phase = "LIAR_GUESS"
-            await interaction.channel.send(embed=embed)
-    else:
-        embed = discord.Embed(title="🚨 라이어 검거 실패!", description=f"결선 투표에서 가장 많은 표를 받은 {top_voted_player.mention} 님은 선량한 시민이었습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
-        await interaction.channel.send(embed=embed, view=PostGameView(game))
-        # 전적 기록: 라이어 승리
-        for p in game.players:
-            db.update_stats(p.id, 'liar', won=(p == game.liar))
 
 class LiarGameCog(commands.Cog):
     """라이어 게임 관련 명령어를 모아둔 Cog"""
@@ -788,7 +652,9 @@ class LiarGameCog(commands.Cog):
                 await channel.send("모든 플레이어의 발언이 끝났습니다! 한 바퀴 더 듣고 싶으신가요?", view=ExtensionVoteView(game))
             else:
                 game.phase = "VOTING_FINAL"
-                await channel.send("두 바퀴가 모두 종료되었습니다! 이제 라이어로 의심되는 사람을 투표해주세요.", view=FinalVoteView(game))
+                view = FinalVoteView(game)
+                msg = await channel.send("두 바퀴가 모두 종료되었습니다! 이제 라이어로 의심되는 사람을 투표해주세요.", view=view)
+                view.message = msg
         else:
             # 턴이 남았다면 다음 플레이어 호출 및 타이머 재시작
             next_player = game.turn_order[game.current_turn_index]
