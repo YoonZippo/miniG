@@ -13,8 +13,8 @@ logger = logging.getLogger('gameBot.liar')
 db = DatabaseManager()
 # 현재 채널별로 진행 중인 게임 상태를 저장할 딕셔너리
 active_games: Dict[int, 'LiarGame'] = {}
-# 최근 사용된 제시어 50개 추적
-recent_words = deque(maxlen=50)
+# 최근 사용된 제시어 30개 추적
+recent_words = deque(maxlen=30)
 
 async def cleanup_game(interaction: discord.Interaction, channel_id: int):
     """현재 채널의 진행 중인 게임과 음성 연결을 안전하게 종료하는 헬퍼 함수"""
