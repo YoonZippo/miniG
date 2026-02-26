@@ -577,15 +577,14 @@ class PostGameView(discord.ui.View):
             
         cog = getattr(self.game, 'cog', None)
         
-        # 새로운 게임 인스턴스 생성 (아예 기존 상태 찌꺼기 없앰)
-        from cogs.liar.liar_game import LiarGame
+        # 새로운 게임 인스턴스 생성
         new_game = LiarGame(host=self.game.host, channel=self.game.channel)
         new_game.players = self.game.players.copy()
         new_game.turn_limit = self.game.turn_limit
         new_game.vote_limit = self.game.vote_limit
         new_game.cog = cog
         
-        from cogs.liar.liar_game import active_games
+        # 전역 딕셔너리에 갱신
         active_games[interaction.channel_id] = new_game
         
         embed = discord.Embed(
@@ -597,12 +596,10 @@ class PostGameView(discord.ui.View):
         player_list = "\n".join([f"👤 {p.display_name}" for p in new_game.players])
         embed.add_field(name=f"현재 참가자 ({len(new_game.players)}명)", value=player_list or "없음", inline=False)
         
-        # 이전 메시지 버튼 비활성화
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
         
-        from cogs.liar.liar_game import LobbyView
         await interaction.channel.send(embed=embed, view=LobbyView(new_game))
 
     @discord.ui.button(label="게임 완전히 종료", style=discord.ButtonStyle.danger, custom_id="end_game_completely")

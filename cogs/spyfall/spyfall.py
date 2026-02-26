@@ -29,6 +29,8 @@ class SpyfallGame:
         self.timer_task: asyncio.Task = None
         self.votes: Dict[discord.Member, int] = {}
         self.discussion_message: discord.Message = None
+        self.discussion_limit: int = 5 # 분 단위
+        self.vote_limit: int = 30 # 초 단위
         
 async def cleanup_spyfall(interaction: discord.Interaction, channel_id: int):
     """게임 종료 및 리소스 정리 유틸리티"""
@@ -43,11 +45,54 @@ async def cleanup_spyfall(interaction: discord.Interaction, channel_id: int):
         await interaction.guild.voice_client.disconnect()
 
 
+class SpyfallTimerSettingModal(discord.ui.Modal, title="제한시간 설정"):
+    def __init__(self, game: SpyfallGame, view: discord.ui.View):
+        super().__init__()
+        self.game = game
+        self.lobby_view = view
+
+        self.discussion_time = discord.ui.TextInput(
+            label="토론 제한시간 (분)",
+            default=str(game.discussion_limit),
+            placeholder="숫자만 입력 (최소 1)",
+            min_length=1,
+            max_length=2
+        )
+        self.add_item(self.discussion_time)
+
+        self.vote_time = discord.ui.TextInput(
+            label="투표 제한시간 (초)",
+            default=str(game.vote_limit),
+            placeholder="숫자만 입력 (최소 10)",
+            min_length=1,
+            max_length=3
+        )
+        self.add_item(self.vote_time)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            new_disc = int(self.discussion_time.value)
+            new_vote = int(self.vote_time.value)
+            if new_disc < 1 or new_vote < 10:
+                await interaction.response.send_message("올바른 범위를 입력해주세요.", ephemeral=True)
+                return
+            self.game.discussion_limit = new_disc
+            self.game.vote_limit = new_vote
+            await self.lobby_view.update_lobby(interaction)
+        except ValueError:
+            await interaction.response.send_message("올바른 숫자를 입력해주세요.", ephemeral=True)
+
 class SpyfallLobbyView(discord.ui.View):
     """스파이폴 게임 대기실 뷰"""
     def __init__(self, game: SpyfallGame):
         super().__init__(timeout=None)
         self.game = game
+
+    async def update_lobby(self, interaction: discord.Interaction):
+        embed = interaction.message.embeds[0]
+        # 시간설정 안내문 추가/수정
+        embed.description = f"참가 버튼을 눌러 게임에 들어오세요.\n최소 3인의 인원이 모이면 방장이 `게임 시작`을 누를 수 있습니다.\n\n⏱️ **현재 설정된 시간:** 토론 {self.game.discussion_limit}분 / 투표 {self.game.vote_limit}초"
+        await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="참가하기", style=discord.ButtonStyle.success, custom_id="spyfall_join")
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -60,6 +105,13 @@ class SpyfallLobbyView(discord.ui.View):
         player_list = "\n".join([f"- {p.mention}" for p in self.game.players])
         embed.set_field_at(0, name=f"현재 참가자 ({len(self.game.players)}명)", value=player_list, inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="시간 설정", style=discord.ButtonStyle.secondary, custom_id="spyfall_timer")
+    async def timer_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.game.host:
+            await interaction.response.send_message("방장만 설정할 수 있습니다.", ephemeral=True)
+            return
+        await interaction.response.send_modal(SpyfallTimerSettingModal(self.game, self))
 
     @discord.ui.button(label="나가기", style=discord.ButtonStyle.secondary, custom_id="spyfall_leave")
     async def leave_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -159,7 +211,7 @@ async def start_spyfall_roles(game: SpyfallGame, interaction: discord.Interactio
             await cleanup_spyfall(interaction, game.channel.id)
             return
 
-    game_duration_minutes = max(5, min(8, len(game.players)))  # 인당 1분, 최소 5분, 최대 8분
+    game_duration_minutes = game.discussion_limit
     embed = discord.Embed(
         title="⏱️ 토론 시간 시작!",
         description=f"역할 확인을 마쳤습니다. 지금부터 **{game_duration_minutes}분** 동안 자유롭게 질문과 답변을 진행해주세요!\n선택된 사람부터 아무에게나 질문을 시작하세요.",
@@ -251,11 +303,13 @@ async def start_spyfall_voting(game: SpyfallGame, channel: discord.TextChannel):
     
     embed = discord.Embed(
         title="🗳️ 스파이 지목 투표",
-        description="토론 시간이 종료되었습니다.\n아래 메뉴에서 **가장 스파이로 의심되는 사람**을 선택하세요!\n\n(모두가 투표하면 결과가 공개됩니다.)",
+        description=f"토론 시간이 종료되었습니다.\n아래 메뉴에서 **가장 스파이로 의심되는 사람**을 선택하세요! ({game.vote_limit}초 제한)\n\n(모두가 투표하거나 시간이 초과되면 결과가 공개됩니다.)",
         color=0xf1c40f
     )
     
-    await channel.send(embed=embed, view=SpyfallVoteView(game))
+    view = SpyfallVoteView(game)
+    msg = await channel.send(embed=embed, view=view)
+    view.message = msg
 
 
 class SpyfallVoteSelect(discord.ui.Select):
@@ -285,12 +339,24 @@ class SpyfallVoteSelect(discord.ui.Select):
 
 class SpyfallVoteView(discord.ui.View):
     def __init__(self, game: SpyfallGame):
-        super().__init__(timeout=None)
+        super().__init__(timeout=game.vote_limit)
+        self.message = None
         self.add_item(SpyfallVoteSelect(game))
+        
+    async def on_timeout(self):
+        self.stop()
+        await process_spyfall_vote(self.game, interaction=None, message_obj=self.message)
 
-async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interaction):
+async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interaction = None, message_obj: discord.Message = None):
     """투표 결과 집계 및 승패 처리"""
-    await interaction.message.edit(view=None)
+    if interaction:
+        try: await interaction.message.edit(view=None)
+        except: pass
+    elif message_obj:
+        try: await message_obj.edit(view=None)
+        except: pass
+        
+    channel = interaction.channel if interaction else game.channel
     
     from collections import Counter
     # 유저 ID 목록을 리스트로 명시적으로 변환하여 전달
@@ -305,7 +371,7 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
         count = list(game.votes.values()).count(player.id)
         result_text += f"- {player.display_name}: {count}표\n"
         
-    await interaction.channel.send(result_text)
+    await channel.send(result_text)
     
     # 동점일 경우 스파이 승리 (시민 합의 실패)
     if len(max_voted_ids) > 1:
@@ -315,14 +381,14 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
             color=0xff0000
         )
         game.phase = "ENDED"
-        await interaction.channel.send(embed=embed, view=SpyfallPostGameView(game))
+        await channel.send(embed=embed, view=SpyfallPostGameView(game))
         # 전적 기록: 스파이 승리 (시민 분열)
         for p in game.players:
             db.update_stats(p.id, 'spyfall', won=(p == game.spy))
         return
         
     top_voted_id = max_voted_ids[0]
-    top_voted_player = interaction.guild.get_member(top_voted_id) or await interaction.client.fetch_user(top_voted_id)
+    top_voted_player = channel.guild.get_member(top_voted_id) or await game.host.client.fetch_user(top_voted_id)
     
     # 스파이를 정확히 지목한 경우
     if top_voted_id == game.spy.id:
@@ -332,7 +398,7 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
             description=f"가장 많은 표를 받은 {top_voted_player.mention} 님은 **스파이가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. 스파이에게는 역전을 위한 **장소 맞추기 기회**가 주어집니다!\n\n👉 **{game.spy.mention} 님, 지금 바로 채팅창에 우리가 있던 '장소'를 입력해주세요!**\n\n*(예비 목록: {', '.join(SPYFALL_LOCATIONS.keys())})*", 
             color=0x3498db
         )
-        await interaction.channel.send(embed=embed)
+        await channel.send(embed=embed)
     else:
         # 엄한 시민을 지목한 경우
         actual_role = game.roles.get(top_voted_player, "일반 시민")
@@ -342,7 +408,7 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
             color=0xff0000
         )
         game.phase = "ENDED"
-        await interaction.channel.send(embed=embed, view=SpyfallPostGameView(game))
+        await channel.send(embed=embed, view=SpyfallPostGameView(game))
         # 전적 기록: 스파이 승리 (엄한 시민 지목)
         for p in game.players:
             db.update_stats(p.id, 'spyfall', won=(p == game.spy))
@@ -414,7 +480,7 @@ async def start_spyfall_ui(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title="🕵️ 스파이폴 게임 모집!", 
-        description="참가 버튼을 눌러 게임에 들어오세요.\n최소 3인의 인원이 모이면 방장이 `게임 시작`을 누를 수 있습니다.", 
+        description=f"참가 버튼을 눌러 게임에 들어오세요.\n최소 3인의 인원이 모이면 방장이 `게임 시작`을 누를 수 있습니다.\n\n⏱️ **현재 설정된 시간:** 토론 {game.discussion_limit}분 / 투표 {game.vote_limit}초", 
         color=0x2b2d31
     )
     
