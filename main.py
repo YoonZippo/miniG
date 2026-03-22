@@ -157,6 +157,12 @@ async def force_stop(ctx):
             active_spyfall_games.pop(ctx.channel.id, None)
     except ImportError:
         pass
+
+    try:
+        from cogs.consonant.cog import active_consonant_games
+        active_consonant_games.discard(ctx.channel.id)
+    except ImportError:
+        pass
         
     embed = discord.Embed(
         title="🛑 강제 종료 완료",
