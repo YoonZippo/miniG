@@ -41,7 +41,7 @@ class MyBot(commands.Bot):
         # cogs 폴더와 그 하위 폴더 내의 파일들을 찾아 확장(cog)으로 불러옵니다.
         for foldername, subfolders, filenames in os.walk('./cogs'):
             for filename in filenames:
-                if filename.endswith('.py') and not filename.startswith('__') and filename not in ['words.py', 'locations.py']:
+                if filename.endswith('.py') and not filename.startswith('__') and filename not in ['words.py', 'locations.py', 'topics.py']:
                     # Windows 경로(역슬래시)를 파이썬 패키지 경로(점)로 변환
                     rel_path = os.path.relpath(foldername, '.')
                     cog_path = f"{rel_path.replace(os.sep, '.')}.{filename[:-3]}"
@@ -111,9 +111,21 @@ class MainMenuView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(f"업데이트 기록을 불러오는 중 오류가 발생했습니다: {e}", ephemeral=True)
 
-    @discord.ui.button(label="준비 중인 게임", style=discord.ButtonStyle.secondary, custom_id="menu_other_game", disabled=True, emoji="🚧")
-    async def other_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("아직 준비 중인 게임입니다.", ephemeral=True)
+    @discord.ui.button(label="초성게임", style=discord.ButtonStyle.success, custom_id="menu_consonant_game", emoji="🔠")
+    async def consonant_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        consonant_cog = bot.get_cog("ConsonantGameCog")
+        if consonant_cog:
+            await consonant_cog.start_game_ui(interaction)
+        else:
+            await interaction.response.send_message("초성게임 시스템을 불러올 수 없습니다!", ephemeral=True)
+
+    @discord.ui.button(label="5초준다", style=discord.ButtonStyle.success, custom_id="menu_fivesec_game", emoji="⏱️")
+    async def fivesec_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        fivesec_cog = bot.get_cog("FiveSecGameCog")
+        if fivesec_cog:
+            await fivesec_cog.start_game_ui(interaction)
+        else:
+            await interaction.response.send_message("5초준다 시스템을 불러올 수 없습니다!", ephemeral=True)
 
 @bot.hybrid_command(name="시작", description="미니게임 메인 메뉴를 보여줍니다.")
 async def show_menu(ctx):
