@@ -43,6 +43,15 @@ class HunminGameResultView(discord.ui.View):
             
             await cog.start_game_phase2(interaction, self.players, self.time_limit, self.length)
 
+    @discord.ui.button(label="게임 종료", style=discord.ButtonStyle.danger, emoji="🛑")
+    async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        active_consonant_games.discard(interaction.channel.id)
+        for child in self.children:
+            child.disabled = True
+        
+        await interaction.response.edit_message(view=self)
+        await interaction.channel.send("훈민정음 게임을 완전히 종료합니다! 고생하셨습니다. 👏")
+
 class HunminSetupView(discord.ui.View):
     def __init__(self, host: discord.Member, bot):
         super().__init__(timeout=300)
@@ -170,6 +179,10 @@ class ConsonantGameCog(commands.Cog):
                 
                 if len(word) != length:
                     await self.game_over(channel, current_player, f"글자 수가 {length}글자가 아닙니다. (입력: {word})", used_words, players, time_limit, length)
+                    break
+                
+                if not all('가' <= char <= '힣' for char in word):
+                    await self.game_over(channel, current_player, f"완성된 한글 단어만 입력할 수 있습니다. 자음이나 모음, 기호 등은 인정되지 않습니다. (입력: {word})", used_words, players, time_limit, length)
                     break
                 
                 if get_chosung(word) != target_chosung:
