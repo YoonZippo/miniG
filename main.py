@@ -75,6 +75,24 @@ class MainMenuView(discord.ui.View):
         from cogs.spyfall.spyfall import start_spyfall_ui
         await start_spyfall_ui(interaction)
 
+
+
+    @discord.ui.button(label="훈민정음", style=discord.ButtonStyle.success, custom_id="menu_consonant_game", emoji="🗣️")
+    async def consonant_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        consonant_cog = bot.get_cog("ConsonantGameCog")
+        if consonant_cog:
+            await consonant_cog.start_game_ui(interaction)
+        else:
+            await interaction.response.send_message("훈민정음 게임을 불러올 수 없습니다!", ephemeral=True)
+
+    @discord.ui.button(label="5초준다(베타)", style=discord.ButtonStyle.secondary, custom_id="menu_fivesec_game", emoji="⏱️")
+    async def fivesec_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        fivesec_cog = bot.get_cog("FiveSecGameCog")
+        if fivesec_cog:
+            await fivesec_cog.start_game_ui(interaction)
+        else:
+            await interaction.response.send_message("5초준다 시스템을 불러올 수 없습니다!", ephemeral=True)
+
     @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -110,22 +128,6 @@ class MainMenuView(discord.ui.View):
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"업데이트 기록을 불러오는 중 오류가 발생했습니다: {e}", ephemeral=True)
-
-    @discord.ui.button(label="훈민정음", style=discord.ButtonStyle.success, custom_id="menu_consonant_game", emoji="🗣️")
-    async def consonant_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        consonant_cog = bot.get_cog("ConsonantGameCog")
-        if consonant_cog:
-            await consonant_cog.start_game_ui(interaction)
-        else:
-            await interaction.response.send_message("훈민정음 게임을 불러올 수 없습니다!", ephemeral=True)
-
-    @discord.ui.button(label="5초준다", style=discord.ButtonStyle.success, custom_id="menu_fivesec_game", emoji="⏱️")
-    async def fivesec_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        fivesec_cog = bot.get_cog("FiveSecGameCog")
-        if fivesec_cog:
-            await fivesec_cog.start_game_ui(interaction)
-        else:
-            await interaction.response.send_message("5초준다 시스템을 불러올 수 없습니다!", ephemeral=True)
 
 @bot.hybrid_command(name="시작", description="미니게임 메인 메뉴를 보여줍니다.")
 async def show_menu(ctx):
