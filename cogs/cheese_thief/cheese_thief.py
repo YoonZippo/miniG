@@ -7,10 +7,13 @@ import discord
 import logging
 import asyncio
 import secrets
+import uuid
 from discord.ext import commands
 from typing import Dict, List, Optional, Set
+from database.manager import DatabaseManager
 
 logger = logging.getLogger('gameBot.cheese_thief')
+db = DatabaseManager()
 
 # ──────────────────────────────────────────────
 # 상수
@@ -58,6 +61,7 @@ class PlayerState:
 
 class CheeseThiefGame:
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
+        self.session_id = uuid.uuid4().hex
         self.host = host
         self.channel = channel
         self.players: List[PlayerState] = [PlayerState(host)]
@@ -1142,6 +1146,12 @@ async def _show_results(game: CheeseThiefGame, channel: discord.TextChannel):
 
     # 무효판 (유효표 0)
     if not tally:
+        db.record_game_result(
+            game.session_id,
+            "cheese_thief",
+            [player.member.id for player in game.players],
+            draw_ids=[player.member.id for player in game.players],
+        )
         embed = discord.Embed(
             title="📊 투표 결과 — 무효판",
             description="유효표가 없습니다. 이 판은 무효 처리됩니다. (승패 기록 없음)",
@@ -1157,6 +1167,13 @@ async def _show_results(game: CheeseThiefGame, channel: discord.TextChannel):
     leader_names = ", ".join(f.display_name for f in leaders)
 
     thief_caught = game.thief.member.id in leaders_ids
+    winning_team = "sleepyhead" if thief_caught else "thief_team"
+    db.record_game_result(
+        game.session_id,
+        "cheese_thief",
+        [player.member.id for player in game.players],
+        [player.member.id for player in game.players if player.current_team == winning_team],
+    )
 
     if thief_caught:
         winner_text = "🎉 **잠꾸러기 팀 승리!** 도둑이 발각됐습니다!"

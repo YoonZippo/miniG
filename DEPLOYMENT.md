@@ -61,6 +61,20 @@ sudo docker compose up -d --build
 
 -   `-d`: 백그라운드 실행 (SSH를 꺼도 봇이 유지됩니다.)
 -   `--build`: 최신 코드로 다시 빌드
+-   SQLite 파일은 `./database/database.db`에 저장되며 `docker-compose.yml`의 볼륨으로 컨테이너 밖에 보존됩니다.
+
+> [!WARNING]
+> 기존 컨테이너 안에만 저장된 DB가 있다면, 볼륨을 처음 적용하기 전에 반드시 백업하고 `./database/database.db`로 복사하세요. 빈 호스트 디렉터리를 마운트하면 기존 컨테이너 DB가 가려져 봇이 새 DB를 만들 수 있습니다.
+
+### SQLite 데이터 백업
+
+봇이 실행 중이어도 SQLite 온라인 백업 API를 사용해 일관된 백업을 만들 수 있습니다.
+
+```bash
+python3 -c "import sqlite3; src=sqlite3.connect('database/database.db'); dst=sqlite3.connect('database/database.backup.db'); src.backup(dst); dst.close(); src.close()"
+```
+
+복원 전에는 봇을 중지하고, 백업 파일을 `database/database.db`로 복사한 뒤 봇을 다시 시작하세요. 백업 파일은 `.gitignore`에 의해 Git에 포함되지 않도록 관리하세요.
 
 ## 6. 딸깍! 자동 배포 스크립트 사용법
 
@@ -84,6 +98,8 @@ sudo docker compose up -d --build
    ```bash
    ./update.sh
    ```
+
+업데이트 스크립트는 `main` 브랜치에서 작업 트리가 깨끗한지 확인하고, 기존 SQLite DB가 있으면 먼저 무결성 검사까지 마친 백업을 `database/database.backup-<UTC 시각>.db`로 만듭니다. 그 뒤 `origin/main`을 fast-forward 방식으로만 반영하고 Docker Compose를 재빌드합니다. 로컬 변경이 있거나 브랜치가 분기된 경우에는 파일을 초기화하거나 삭제하지 않고 중단하므로, 상태를 확인한 뒤 수동으로 정리해야 합니다.
 
 ---
 

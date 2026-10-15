@@ -5,6 +5,7 @@ from discord import app_commands
 from typing import Dict, List
 import random
 import asyncio
+import uuid
 from collections import Counter, deque
 from database.manager import DatabaseManager
 
@@ -28,6 +29,7 @@ from cogs.liar.words import NORMAL_WORDS
 class LiarGame:
     """단일 라이어 게임의 상태를 관리하는 클래스"""
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
+        self.session_id = uuid.uuid4().hex
         self.host = host
         self.channel = channel
         self.players: List[discord.Member] = [host]
@@ -543,9 +545,13 @@ async def process_tiebreaker_vote(game, message_obj, tied_players, interaction=N
     
     if len(max_voted_ids) > 1:
         embed = discord.Embed(title="🚨 2차 투표 무효! 라이어 검거 실패!", description=f"결선 투표에서도 동점자가 발생하여 시민들이 합의에 도달하지 못했습니다!\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
-        from database.manager import DatabaseManager
-        db = DatabaseManager()
-        for p in game.players: db.update_stats(p.id, 'liar', won=(p == game.liar))
+        db.record_game_result(
+            game.session_id,
+            "liar",
+            [player.id for player in game.players],
+            [game.liar.id],
+            special_winner_ids=[game.liar.id],
+        )
         await channel.send(embed=embed, view=PostGameView(game))
         return
         
@@ -568,15 +574,19 @@ async def process_tiebreaker_vote(game, message_obj, tied_players, interaction=N
         game.timer_task = __import__('asyncio').create_task(game.cog.defense_timer(game, top_voted_player))
 
 async def execute_player(game, target, channel, force_fail=False):
-    from database.manager import DatabaseManager
-    db = DatabaseManager()
     if target.id == game.liar.id and not force_fail:
         embed = discord.Embed(title="🚨 라이어 지목 완료!", description=f"처형된 {target.mention} 님은 **라이어가 맞습니다!**\n\n하지만 아직 끝이 아닙니다. {'바보 ' if game.game_mode == 'IDIOT' else ''}라이어에게도 역전의 기회가 있습니다! ({'바보 ' if game.game_mode == 'IDIOT' else ''}라이어 제시어: **{game.liar_word if game.game_mode == 'IDIOT' else '비밀'}**)\n\n👉 **{target.mention} 님, 지금 바로 채팅창에 '시민들의 진짜 제시어'를 유추해서 입력해주세요!**", color=0x3498db)
         game.phase = "LIAR_GUESS"
         await channel.send(embed=embed)
     else:
         embed = discord.Embed(title="🚨 라이어 검거 실패!", description=f"{'처형된 '+target.mention+' 님은 선량한 시민이었습니다!' if not force_fail else '라이어를 검거하지 못했습니다.'}\n\n진짜 라이어는 바로 {game.liar.mention} 님이었습니다! (제시어: **{game.word}**)\n\n**🎉 라이어의 승리입니다! 🎉**", color=0xff0000)
-        for p in game.players: db.update_stats(p.id, 'liar', won=(p == game.liar))
+        db.record_game_result(
+            game.session_id,
+            "liar",
+            [player.id for player in game.players],
+            [game.liar.id],
+            special_winner_ids=[game.liar.id],
+        )
         await channel.send(embed=embed, view=PostGameView(game))
 class PostGameView(discord.ui.View):
     """게임 종료 후 다시하기 또는 종료를 선택하는 뷰"""
@@ -729,12 +739,21 @@ class LiarGameCog(commands.Cog):
             # 정답 비교 (공백을 제거하여 조금 더 너그럽게 판정)
             if user_guess.replace(" ", "") == game.word.replace(" ", ""):
                 embed = discord.Embed(title="🚨 라이어의 정답 확인!", description=f"라이어가 정답 **[{game.word}]** 을(를) 맞췄습니다!\n\n**🎉 라이어가 정체를 들키고도 승리했습니다! 🎉**", color=0xff0000)
-                for p in game.players:
-                    db.update_stats(p.id, 'liar', won=(p == game.liar))
+                db.record_game_result(
+                    game.session_id,
+                    "liar",
+                    [player.id for player in game.players],
+                    [game.liar.id],
+                    special_winner_ids=[game.liar.id],
+                )
             else:
                 embed = discord.Embed(title="🚨 라이어의 정답 확인!", description=f"라이어가 **오답**({user_guess})을(를) 입력했습니다! (정답: **{game.word}**)\n\n**🎉 시민들의 완벽한 승리입니다! 🎉**", color=0x00ff00)
-                for p in game.players:
-                    db.update_stats(p.id, 'liar', won=(p != game.liar))
+                db.record_game_result(
+                    game.session_id,
+                    "liar",
+                    [player.id for player in game.players],
+                    [player.id for player in game.players if player != game.liar],
+                )
                 
             game.phase = "ENDED"
             await message.channel.send(embed=embed, view=PostGameView(game))

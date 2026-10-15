@@ -6,3 +6,5 @@ services:
     container_name: discord-liar-bot
     restart: always
     env_file: .env
+    volumes:
+      - ./database:/app/database

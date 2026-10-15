@@ -11,13 +11,16 @@ import discord
 import logging
 import asyncio
 import secrets
+import uuid
 from itertools import combinations
 from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from discord.ext import commands
+from database.manager import DatabaseManager
 
 logger = logging.getLogger('gameBot.holdem')
+db = DatabaseManager()
 
 # ──────────────────────────────────────────────
 # 상수 및 카드 정의
@@ -216,9 +219,11 @@ class Player:
 
 class HoldemGame:
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
+        self.session_id = uuid.uuid4().hex
         self.host = host
         self.channel = channel
         self.players: List[Player] = [Player(member=host)]
+        self.session_participants = {host.id}
         self.deck: List[Card] = []
         self.board: List[Card] = []
 
@@ -314,6 +319,7 @@ class HoldemLobbyView(discord.ui.View):
             return
 
         self.game.players.append(Player(member=interaction.user))
+        self.game.session_participants.add(interaction.user.id)
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
     @discord.ui.button(label="나가기", style=discord.ButtonStyle.secondary, emoji="🚪", custom_id="pk_leave")
@@ -323,6 +329,7 @@ class HoldemLobbyView(discord.ui.View):
             await interaction.response.send_message("참가 중이 아닙니다.", ephemeral=True)
             return
         self.game.players.remove(player)
+        self.game.session_participants.discard(interaction.user.id)
         if interaction.user.id == self.game.host.id:
             humans = [p for p in self.game.players if not p.is_ai]
             if humans:
@@ -374,6 +381,12 @@ async def start_new_hand(game: HoldemGame):
         winner_name = winner.display_name if winner else "없음"
         await game.channel.send(f"🏆 모든 상대가 탈락했습니다! **{winner_name}**님의 최종 매치 우승!")
         game.phase = "FINISHED"
+        db.record_game_result(
+            game.session_id,
+            "holdem",
+            list(game.session_participants),
+            [winner.member.id] if winner and winner.member else [],
+        )
         active_holdem_games.pop(game.channel.id, None)
         return
 

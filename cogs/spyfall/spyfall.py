@@ -4,6 +4,7 @@ from discord.ext import commands
 import random
 import asyncio
 import os
+import uuid
 from typing import List, Dict
 
 logger = logging.getLogger('gameBot.spyfall')
@@ -19,6 +20,7 @@ active_spyfall_games = {}
 class SpyfallGame:
     """스파이폴 게임의 상태를 관리하는 클래스"""
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
+        self.session_id = uuid.uuid4().hex
         self.host = host
         self.channel = channel
         self.players: List[discord.Member] = [host]
@@ -383,8 +385,13 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
         game.phase = "ENDED"
         await channel.send(embed=embed, view=SpyfallPostGameView(game))
         # 전적 기록: 스파이 승리 (시민 분열)
-        for p in game.players:
-            db.update_stats(p.id, 'spyfall', won=(p == game.spy))
+        db.record_game_result(
+            game.session_id,
+            "spyfall",
+            [player.id for player in game.players],
+            [game.spy.id],
+            special_winner_ids=[game.spy.id],
+        )
         return
         
     top_voted_id = max_voted_ids[0]
@@ -410,8 +417,13 @@ async def process_spyfall_vote(game: SpyfallGame, interaction: discord.Interacti
         game.phase = "ENDED"
         await channel.send(embed=embed, view=SpyfallPostGameView(game))
         # 전적 기록: 스파이 승리 (엄한 시민 지목)
-        for p in game.players:
-            db.update_stats(p.id, 'spyfall', won=(p == game.spy))
+        db.record_game_result(
+            game.session_id,
+            "spyfall",
+            [player.id for player in game.players],
+            [game.spy.id],
+            special_winner_ids=[game.spy.id],
+        )
 
 class SpyfallPostGameView(discord.ui.View):
     """게임 종료 후 다시하기 또는 종료를 선택하는 뷰"""
@@ -523,8 +535,13 @@ class SpyfallCog(commands.Cog):
                     color=0xff0000
                 )
                 # 전적 기록: 스파이 승리
-                for p in game.players:
-                    db.update_stats(p.id, 'spyfall', won=(p == game.spy))
+                db.record_game_result(
+                    game.session_id,
+                    "spyfall",
+                    [player.id for player in game.players],
+                    [game.spy.id],
+                    special_winner_ids=[game.spy.id],
+                )
             else:
                 embed = discord.Embed(
                     title="🚨 스파이의 정답 확인!", 
@@ -532,8 +549,12 @@ class SpyfallCog(commands.Cog):
                     color=0x00ff00
                 )
                 # 전적 기록: 시민 승리
-                for p in game.players:
-                    db.update_stats(p.id, 'spyfall', won=(p != game.spy))
+                db.record_game_result(
+                    game.session_id,
+                    "spyfall",
+                    [player.id for player in game.players],
+                    [player.id for player in game.players if player != game.spy],
+                )
                 
             game.phase = "ENDED"
             await message.channel.send(embed=embed, view=SpyfallPostGameView(game))

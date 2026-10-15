@@ -2,6 +2,10 @@ import discord
 from discord.ext import commands
 import asyncio
 import random
+import uuid
+from database.manager import DatabaseManager
+
+db = DatabaseManager()
 
 active_consonant_games = set()
 
@@ -159,9 +163,10 @@ class ConsonantGameCog(commands.Cog):
         else:
             await interaction.response.send_message(embed=start_embed)
 
-        asyncio.create_task(self.game_loop(interaction.channel, players, time_limit, length, target_chosung))
+        session_id = uuid.uuid4().hex
+        asyncio.create_task(self.game_loop(interaction.channel, players, time_limit, length, target_chosung, session_id))
 
-    async def game_loop(self, channel, players, time_limit, length, target_chosung):
+    async def game_loop(self, channel, players, time_limit, length, target_chosung, session_id):
         used_words = []
         current_turn_index = 0
 
@@ -178,19 +183,19 @@ class ConsonantGameCog(commands.Cog):
                 word = msg.content.replace(" ", "")
                 
                 if len(word) != length:
-                    await self.game_over(channel, current_player, f"글자 수가 {length}글자가 아닙니다. (입력: {word})", used_words, players, time_limit, length)
+                    await self.game_over(channel, current_player, f"글자 수가 {length}글자가 아닙니다. (입력: {word})", used_words, players, time_limit, length, session_id)
                     break
                 
                 if not all('가' <= char <= '힣' for char in word):
-                    await self.game_over(channel, current_player, f"완성된 한글 단어만 입력할 수 있습니다. 자음이나 모음, 기호 등은 인정되지 않습니다. (입력: {word})", used_words, players, time_limit, length)
+                    await self.game_over(channel, current_player, f"완성된 한글 단어만 입력할 수 있습니다. 자음이나 모음, 기호 등은 인정되지 않습니다. (입력: {word})", used_words, players, time_limit, length, session_id)
                     break
                 
                 if get_chosung(word) != target_chosung:
-                    await self.game_over(channel, current_player, f"초성이 일치하지 않습니다. (입력: {word})", used_words, players, time_limit, length)
+                    await self.game_over(channel, current_player, f"초성이 일치하지 않습니다. (입력: {word})", used_words, players, time_limit, length, session_id)
                     break
                 
                 if word in used_words:
-                    await self.game_over(channel, current_player, f"이미 누군가 사용한 단어입니다. (입력: {word})", used_words, players, time_limit, length)
+                    await self.game_over(channel, current_player, f"이미 누군가 사용한 단어입니다. (입력: {word})", used_words, players, time_limit, length, session_id)
                     break
                 
                 used_words.append(word)
@@ -199,11 +204,17 @@ class ConsonantGameCog(commands.Cog):
                 current_turn_index = (current_turn_index + 1) % len(players)
                 
             except asyncio.TimeoutError:
-                await self.game_over(channel, current_player, "시간 초과 ⏰", used_words, players, time_limit, length)
+                await self.game_over(channel, current_player, "시간 초과 ⏰", used_words, players, time_limit, length, session_id)
                 break
 
-    async def game_over(self, channel, loser, reason, used_words, players, time_limit, length):
+    async def game_over(self, channel, loser, reason, used_words, players, time_limit, length, session_id):
         active_consonant_games.discard(channel.id)
+        db.record_game_result(
+            session_id,
+            "consonant",
+            [player.id for player in players],
+            [player.id for player in players if player != loser],
+        )
         
         used_words_str = ", ".join(used_words) if used_words else "없음"
         

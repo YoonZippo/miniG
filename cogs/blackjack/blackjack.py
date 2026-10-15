@@ -9,11 +9,14 @@ import discord
 import logging
 import asyncio
 import secrets
+import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from discord.ext import commands
+from database.manager import DatabaseManager
 
 logger = logging.getLogger('gameBot.blackjack')
+db = DatabaseManager()
 
 # ──────────────────────────────────────────────
 # 상수 및 카드 정의
@@ -107,6 +110,7 @@ class PlayerHand:
 
 class BlackjackGame:
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
+        self.session_id = uuid.uuid4().hex
         self.host = host
         self.channel = channel
         self.players: List[PlayerHand] = [PlayerHand(host)]
@@ -607,6 +611,13 @@ async def settlement_phase(game: BlackjackGame):
         result_lines.append(f"• **{p.display_name}**: {card_str} ({p_score}점)\n  결과: {status_desc} | 남은 보유 칩: **{p.chips} 칩**")
 
     embed.add_field(name="👥 플레이어 결과", value="\n\n".join(result_lines), inline=False)
+    db.record_game_result(
+        f"{game.session_id}:round:{game.round_num}",
+        "blackjack",
+        [player.member.id for player in game.players],
+        [player.member.id for player in game.players if player.net_gain > 0],
+        [player.member.id for player in game.players if player.net_gain == 0],
+    )
     view = SettlementView(game)
     await game.channel.send(embed=embed, view=view)
 

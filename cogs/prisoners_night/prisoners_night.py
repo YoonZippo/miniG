@@ -9,10 +9,13 @@ import asyncio
 import json
 import os
 import random
+import uuid
 from discord.ext import commands
 from typing import Dict, List, Optional, Set
+from database.manager import DatabaseManager
 
 logger = logging.getLogger('gameBot.prisoners_night')
+db = DatabaseManager()
 
 # ──────────────────────────────────────────────
 # 상수 및 기본 설정
@@ -61,6 +64,7 @@ class PlayerState:
 
 class PrisonersNightGame:
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
+        self.session_id = uuid.uuid4().hex
         self.host = host
         self.channel = channel
         self.players: List[PlayerState] = [PlayerState(host)]
@@ -584,8 +588,22 @@ class ResultView(discord.ui.View):
 
 
 async def finish_game(game: PrisonersNightGame, winner: str, reason: str, tally: Optional[Dict[int, int]] = None):
+    if game.phase == "FINISHED":
+        return
     game.phase = "FINISHED"
     game.winner = winner
+    winning_role = "prisoner" if winner == "PRISONERS" else "infiltrator"
+    db.record_game_result(
+        game.session_id,
+        "prisoners_night",
+        [player.member.id for player in game.players],
+        [player.member.id for player in game.players if player.role == winning_role],
+        special_winner_ids=(
+            [player.member.id for player in game.players if player.role == winning_role]
+            if winner == "INFILTRATOR"
+            else []
+        ),
+    )
 
     infiltrator_name = game.infiltrator.display_name if game.infiltrator else "없음"
     infiltrator_mention = game.infiltrator.mention if game.infiltrator else ""

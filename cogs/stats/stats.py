@@ -16,16 +16,17 @@ class StatsCog(commands.Cog):
         member = member or ctx.author
         stats = self.db.get_user_stats(member.id)
 
-        if not stats:
-            await ctx.send(f"❌ {member.display_name}님의 전적 데이터가 아직 없습니다.")
-            return
-
-        liar_wins, liar_plays, spyfall_wins, spyfall_plays = stats
+        eco = self.db.get_user_economy(member.id)
+        liar_wins, liar_plays, spyfall_wins, spyfall_plays = stats if stats else (0, 0, 0, 0)
         
         def safe_div(a, b):
             return (a / b * 100) if b > 0 else 0
 
-        embed = discord.Embed(title=f"🏅 {member.display_name}님의 프로필", color=0x3498db)
+        embed = discord.Embed(
+            title=f"🏅 {member.display_name}님의 프로필",
+            description=f"칭호: **[{eco['title']}]** | 보유 포인트: **🪙 {eco['points']:,} P**",
+            color=0x3498db
+        )
         if member.avatar:
             embed.set_thumbnail(url=member.avatar.url)
         
@@ -39,6 +40,26 @@ class StatsCog(commands.Cog):
             value=f"승리: {spyfall_wins} / 판수: {spyfall_plays}\n승률: {safe_div(spyfall_wins, spyfall_plays):.1f}%", 
             inline=True
         )
+
+        game_labels = {
+            "cheese_thief": "🧀 치즈 도둑",
+            "prisoners_night": "⛓️ 죄수들의 밤",
+            "blackjack": "🃏 블랙잭 라운드",
+            "holdem": "♠️ 텍사스 홀덤",
+            "consonant": "🗣️ 훈민정음",
+        }
+        for game_type, game_stats in self.db.get_game_stats(member.id).items():
+            label = game_labels.get(game_type)
+            if not label:
+                continue
+            plays = game_stats["plays"]
+            wins = game_stats["wins"]
+            draws = game_stats["draws"]
+            embed.add_field(
+                name=label,
+                value=f"승리: {wins} / 판수: {plays} / 무승부: {draws}\n승률: {safe_div(wins, plays):.1f}%",
+                inline=True,
+            )
         
         await ctx.send(embed=embed)
 
