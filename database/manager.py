@@ -271,6 +271,28 @@ class DatabaseManager:
             conn.commit()
             return new_balance
 
+    def adjust_points_safe(self, user_id: int, amount: int, reason: str = "") -> int:
+        """잔액을 음수로 만들지 않고 포인트를 조정한다.
+
+        차감액이 잔액을 넘으면 잔액 전액만 차감한다. (게임 정산용)
+        """
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            self._ensure_economy_user(cursor, user_id)
+            if amount < 0:
+                cursor.execute('SELECT points FROM user_economy WHERE user_id = ?', (user_id,))
+                balance = cursor.fetchone()[0]
+                amount = max(amount, -balance)
+                if amount == 0:
+                    return balance
+            cursor.execute('UPDATE user_economy SET points = points + ? WHERE user_id = ?', (amount, user_id))
+            cursor.execute('SELECT points FROM user_economy WHERE user_id = ?', (user_id,))
+            new_balance = cursor.fetchone()[0]
+            cursor.execute('INSERT INTO point_logs (user_id, amount, balance_after, reason) VALUES (?, ?, ?, ?)',
+                           (user_id, amount, new_balance, reason))
+            conn.commit()
+            return new_balance
+
     def claim_daily(self, user_id: int) -> Tuple[bool, int, int, str]:
         """(성공여부, 지급된 포인트, 연속출석일수, 안내메시지)"""
         today_str = datetime.now().strftime("%Y-%m-%d")

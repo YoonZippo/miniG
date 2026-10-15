@@ -28,8 +28,8 @@ db = DatabaseManager()
 MIN_PLAYERS = 1
 MAX_PLAYERS = 8
 INITIAL_CHIPS = 1000
-SMALL_BLIND = 10
-BIG_BLIND = 20
+SMALL_BLIND = 5   # 1칩 = 1 G-Point: 블라인드 축소 (기존 10/20)
+BIG_BLIND = 10
 DEFAULT_ACTION_SECONDS = 45
 
 SUITS = ["♠", "♥", "♦", "♣"]
@@ -183,7 +183,16 @@ class Player:
         self.member = member
         self.is_ai = is_ai
         self._name = name or (member.display_name if member else "AI봇")
-        self.chips: int = INITIAL_CHIPS
+        # 1칩 = 1 G-Point: 인간 플레이어 스택은 봇 지갑 잔액과 동기화된다.
+        if member is not None:
+            try:
+                self.chips: int = db.get_user_economy(member.id)["points"]
+            except Exception:
+                logger.exception("G-Point 잔액 조회 실패 — 폴백 스택 사용")
+                self.chips = INITIAL_CHIPS
+        else:
+            self.chips: int = INITIAL_CHIPS
+        self.entry_chips: int = self.chips  # G-Point 정산 기준 스냅샷
         self.hole_cards: List[Card] = []
         self.current_street_bet: int = 0
         self.total_hand_bet: int = 0
@@ -283,8 +292,8 @@ class HoldemLobbyView(discord.ui.View):
             title="♠️ 텍사스 홀덤 포커 (Texas Hold'em) — 테이블 로비",
             description=(
                 "**세계에서 가장 인기 있는 노리밋 포커 토너먼트!**\n\n"
-                "• **블라인드**: 스몰 10 / 빅 20 칩\n"
-                "• **시작 스택**: 1,000 칩\n"
+                "• **블라인드**: 스몰 5 / 빅 10 칩\n"
+                "• **테이블 칩**: 보유 G-Point를 그대로 사용 (1칩 = 1P)\n"
                 "• **스트리트**: 프리플롭 → 플롭(3장) → 턴(1장) → 리버(1장) → 쇼다운\n\n"
                 f"👥 **참가 좌석:** {len(self.game.players)}/{MAX_PLAYERS}석\n"
                 f"👑 **호스트:** {self.game.host.mention}"
@@ -373,6 +382,35 @@ class HoldemLobbyView(discord.ui.View):
 # 핸드 및 스트리트 진행
 # ──────────────────────────────────────────────
 
+def _format_signed(n: int) -> str:
+    return f"+{n}" if n > 0 else str(n)
+
+
+def _settle_holdem_points(game: HoldemGame) -> None:
+    """세션 전체 칩 변동분을 G-Point로 정산 (1칩 = 1P).
+
+    인간 플레이어만 대상. 세션 시작 대비 현재 스택의 증감분.
+    AI 상대 승리 = 민팅, AI 상대 패배 = 소각.
+    """
+    for p in game.players:
+        if p.is_ai or p.member is None or p.member.id not in game.session_participants:
+            continue
+        delta = p.chips - p.entry_chips
+        if delta != 0:
+            try:
+                db.adjust_points_safe(p.member.id, delta, f"HOLDEM_{game.session_id[:8]}")
+            except Exception:
+                logger.exception("홀덤 G-Point 정산 실패 (user=%s)", p.member.id)
+        p.entry_chips = p.chips
+
+
+def _snapshot_holdem_entries(game: HoldemGame) -> None:
+    """핸드 시작 시 스택 스냅샷 — 세션 중 참가자 누수 방지용."""
+    for p in game.players:
+        if not p.is_ai:
+            p.entry_chips = p.chips
+
+
 async def start_new_hand(game: HoldemGame):
     # 탈락자(칩 0) 제외
     game.players = [p for p in game.players if p.chips > 0]
@@ -381,6 +419,8 @@ async def start_new_hand(game: HoldemGame):
         winner_name = winner.display_name if winner else "없음"
         await game.channel.send(f"🏆 모든 상대가 탈락했습니다! **{winner_name}**님의 최종 매치 우승!")
         game.phase = "FINISHED"
+        # 최종 정산: 세션 참가자 잔여 칩 변동분을 G-Point에 반영
+        _settle_holdem_points(game)
         db.record_game_result(
             game.session_id,
             "holdem",
@@ -395,6 +435,9 @@ async def start_new_hand(game: HoldemGame):
     game.pot = 0
     game.highest_bet = 0
     game.min_raise = BIG_BLIND
+
+    # 핸드 시작 시점 스택 스냅샷 (세션 중 잔여 정산 기준 유지)
+    _snapshot_holdem_entries(game)
 
     for p in game.players:
         p.reset_hand()
@@ -443,7 +486,7 @@ async def start_new_hand(game: HoldemGame):
     await game.channel.send(
         f"♠️ **[HAND {game.round_num}] 시작!**\n"
         f"🔘 버튼: **{game.players[game.button_idx].display_name}** | "
-        f"SB(10): **{sb_player.display_name}** | BB(20): **{bb_player.display_name}**"
+        f"SB({SMALL_BLIND}): **{sb_player.display_name}** | BB({BIG_BLIND}): **{bb_player.display_name}**"
     )
 
     await process_betting_round(game)
@@ -854,11 +897,12 @@ class NextHandView(discord.ui.View):
 async def finish_hand_uncontested(game: HoldemGame, winner: Player):
     """상대가 모두 폴드하여 쇼다운 없이 승리"""
     winner.chips += game.pot
+    _settle_holdem_points(game)
     embed = discord.Embed(
         title="🏆 승자 결정 (쇼다운 없음)",
         description=(
             f"모든 상대가 폴드하여 **{winner.mention}**님이 승리했습니다!\n"
-            f"💰 **획득한 팟:** **{game.pot} 칩** (현재 스택: **{winner.chips} 칩**)"
+            f"💰 **획득한 팟:** **{game.pot} 칩** (현재 스택: **{winner.chips} 칩** | G-Point 정산: **{_format_signed(winner.chips - winner.entry_chips)}P**)"
         ),
         color=0x2ecc71
     )
@@ -903,6 +947,7 @@ async def showdown_phase(game: HoldemGame):
         lines.append(f"• **{p.display_name}**: {p.format_hole()} — **{hand_name}**{win_tag}\n  (남은 스택: **{p.chips} 칩**)")
 
     embed.add_field(name="핸드 공개", value="\n".join(lines), inline=False)
+    _settle_holdem_points(game)
     view = NextHandView(game)
     await game.channel.send(embed=embed, view=view)
 

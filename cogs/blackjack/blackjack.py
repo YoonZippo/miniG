@@ -23,7 +23,8 @@ db = DatabaseManager()
 # ──────────────────────────────────────────────
 MIN_PLAYERS = 1
 MAX_PLAYERS = 5
-INITIAL_CHIPS = 1000
+INITIAL_CHIPS = 10  # G-Point 조회 실패 시 폴백 스택 (10칩 = 1,000P)
+MIN_BET = 100  # 최소 베팅 100칩 = 10,000P (1칩 = 100P)
 DEFAULT_TURN_SECONDS = 45
 
 SUITS = ["♠", "♥", "♦", "♣"]
@@ -72,10 +73,18 @@ def is_natural_blackjack(cards: List[Card]) -> bool:
 # ──────────────────────────────────────────────
 
 class PlayerHand:
-    def __init__(self, member: discord.Member, chips: int = INITIAL_CHIPS):
+    def __init__(self, member: discord.Member, chips: Optional[int] = None):
         self.member = member
         self.cards: List[Card] = []
         self.bet: int = 0
+        # 1칩 = 100P: 테이블 스택은 지갑 잔액을 100으로 나눈 칩 수.
+        if chips is None:
+            try:
+                chips = db.get_user_economy(member.id)["points"] // 100
+            except Exception:
+                logger.exception("G-Point 잔액 조회 실패 — 폴백 스택 사용")
+                chips = INITIAL_CHIPS
+            chips = max(chips, 1)  # 잔액 100P 미만도 최소 1칩 보유로 시작 (정산 clamp로 보호)
         self.chips: int = chips
         self.status: str = "WAITING"
         # WAITING | BETTING | PLAYING | STAND | BUST | BLACKJACK | DONE
@@ -169,13 +178,13 @@ class BlackjackLobbyView(discord.ui.View):
                 "**딜러를 상대로 21점에 가장 가까운 점수를 만드는 카지노 카드 게임!**\n\n"
                 "• **내추럴 블랙잭(A+10)**: 1.5배(3:2) 배당\n"
                 "• **딜러 규칙**: S17 (모든 17 이상에서 딜러는 스탠드)\n"
-                "• **테이블 칩**: 참가자당 1,000칩 지급 (게임 내 가상 칩)\n\n"
+                "• **테이블 칩**: 보유 G-Point의 1/100 = 1칩 (1,000P → 10칩)\n\n"
                 f"👥 **참가 인원:** {len(self.game.players)}/{MAX_PLAYERS}명\n"
                 f"👑 **호스트:** {self.game.host.mention}"
             ),
             color=0x1b4332
         )
-        player_list = "\n".join([f"{i+1}. {p.display_name} (보유: {p.chips} 칩)" for i, p in enumerate(self.game.players)])
+        player_list = "\n".join([f"{i+1}. {p.display_name} (보유: {p.chips:,} 칩 = {p.chips * 100:,}P)" for i, p in enumerate(self.game.players)])
         embed.add_field(name="테이블 좌석", value=player_list or "없음", inline=False)
         embed.set_footer(text="혼자 바로 시작하려면 [솔로 즉시 시작], 친구와 함께라면 [참가] 후 시작하세요.")
         return embed
@@ -236,35 +245,80 @@ class BlackjackLobbyView(discord.ui.View):
 # 베팅 단계
 # ──────────────────────────────────────────────
 
-class BetSelectView(discord.ui.View):
+class BetAmountModal(discord.ui.Modal, title="베팅 금액 직접 입력"):
+    amount = discord.ui.TextInput(
+        label=f"금액 (칩 단위, 최소 {MIN_BET}칩 = {MIN_BET * 100:,}P)",
+        placeholder="예: 2500 (250,000P)",
+        min_length=1,
+        max_length=7,
+    )
+
     def __init__(self, game: BlackjackGame):
         super().__init__(timeout=60)
         self.game = game
 
-    @discord.ui.select(
-        placeholder="베팅할 칩 금액을 선택하세요",
-        options=[
-            discord.SelectOption(label="10 칩", value="10", emoji="🪙"),
-            discord.SelectOption(label="20 칩", value="20", emoji="🪙"),
-            discord.SelectOption(label="50 칩 (추천)", value="50", emoji="🪙", default=True),
-            discord.SelectOption(label="100 칩", value="100", emoji="💰"),
-            discord.SelectOption(label="200 칩", value="200", emoji="💎"),
-        ]
-    )
-    async def select_bet(self, interaction: discord.Interaction, select: discord.ui.Select):
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount = int(str(self.amount.value).replace(",", "").strip())
+        except ValueError:
+            await interaction.response.send_message("숫자만 입력하세요. 예: 2500", ephemeral=True)
+            return
+
         player = self.game.get_player(interaction.user.id)
         if not player:
             await interaction.response.send_message("테이블 참가자가 아닙니다.", ephemeral=True)
             return
 
-        amount = int(select.values[0])
+        view = BetSelectView(self.game)
+        await view._resolve_bet(interaction, amount)
+
+
+class BetSelectView(discord.ui.View):
+    # 재미 확대: 1칩 = 100P. 잔액 부족 옵션 비활성화.
+    BET_OPTIONS = (100, 500, 1000, 5000, 10000)
+
+    def __init__(self, game: BlackjackGame):
+        super().__init__(timeout=60)
+        self.game = game
+
+    def _bet_options(self) -> list:
+        opts = []
+        for v in self.BET_OPTIONS:
+            opts.append(discord.SelectOption(
+                label=f"{v:,} 칩 (= {v * 100:,}P)",
+                value=str(v),
+                emoji="💎" if v >= 5000 else ("💰" if v >= 1000 else "🪙"),
+                default=(v == 1000),
+            ))
+        return opts
+
+    @discord.ui.select(placeholder="베팅할 금액을 선택하세요 (1칩 = 100P)", min_values=1, max_values=1)
+    async def select_bet(self, interaction: discord.Interaction, select: discord.ui.Select):
+        # @ui.select는 데코레이터 시점 옵션 고정 → 콜백 첫 호출에서 BET_OPTIONS 기준으로 치환
+        if not select.options or select.options[0].value == "10":
+            select.options = self._bet_options()
+        await self._resolve_bet(interaction, int(select.values[0]))
+
+    @discord.ui.button(label="직접 입력", style=discord.ButtonStyle.secondary, emoji="⌨️", custom_id="bj_bet_custom", row=1)
+    async def custom_bet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BetAmountModal(self.game))
+
+    async def _resolve_bet(self, interaction: discord.Interaction, amount: int):
+        player = self.game.get_player(interaction.user.id)
+        if not player:
+            await interaction.response.send_message("테이블 참가자가 아닙니다.", ephemeral=True)
+            return
+
+        amount = int(amount)
+        if amount < MIN_BET:
+            amount = MIN_BET
         if amount > player.chips:
-            await interaction.response.send_message(f"보유 칩({player.chips} 칩)보다 많이 베팅할 수 없습니다!", ephemeral=True)
+            await interaction.response.send_message(f"보유 칩({player.chips:,} 칩)보다 많이 베팅할 수 없습니다!", ephemeral=True)
             return
 
         player.bet = amount
         player.status = "BET_PLACED"
-        await interaction.response.send_message(f"✅ **{amount} 칩** 베팅을 완료했습니다!", ephemeral=True)
+        await interaction.response.send_message(f"✅ **{amount:,} 칩 (={amount * 100:,}P)** 베팅을 완료했습니다!", ephemeral=True)
 
         # 모든 플레이어가 베팅 완료했는지 확인
         all_bet = all(p.bet > 0 for p in self.game.players)
@@ -281,13 +335,14 @@ async def start_betting_phase(game: BlackjackGame):
         title=f"🪙 [ROUND {game.round_num}] 베팅 단계",
         description=(
             "딜러가 카드를 배분하기 전, 이번 라운드에 걸 칩을 선택하세요.\n"
-            "아래 선택 메뉴에서 베팅 금액(10~200 칩)을 선택하세요.\n\n"
-            "⏱️ 제한시간: **30초** (시간 초과 시 기본 50칩 자동 베팅)"
+            "**1칩 = 100P** — 베팅 1,000칩이면 100,000P가 오갑니다!\n"
+            "아래 선택 메뉴에서 베팅 금액(100~10,000 칩)을 선택하세요.\n\n"
+            "⏱️ 제한시간: **30초** (미선택 시 1칩(=100P) 자동 베팅)"
         ),
         color=0xf39c12
     )
     for p in game.players:
-        embed.add_field(name=f"{p.display_name}", value=f"보유 칩: {p.chips} 칩", inline=True)
+        embed.add_field(name=f"{p.display_name}", value=f"보유 칩: {p.chips:,} 칩 (= {p.chips * 100:,}P)", inline=True)
 
     view = BetSelectView(game)
     game.game_message = await game.channel.send(embed=embed, view=view)
@@ -297,10 +352,10 @@ async def start_betting_phase(game: BlackjackGame):
             await asyncio.sleep(30)
         except asyncio.CancelledError:
             pass
-        # 미베팅자 기본값(50칩 또는 남은 칩 전액) 처리
+        # 미베팅자 기본값(최소 베팅 또는 남은 칩 전액) 처리
         for p in game.players:
             if p.bet == 0:
-                p.bet = min(50, p.chips) if p.chips > 0 else 0
+                p.bet = min(1, p.chips) if p.chips > 0 else 0  # 시간 초과 시 1칩(=100P) 자동 베팅
         await deal_initial_cards(game)
 
     game.timer_task = asyncio.create_task(betting_timer())
@@ -416,10 +471,10 @@ class PlayerActionView(discord.ui.View):
 
         if score > 21:
             self.player.status = "BUST"
-            await interaction.response.send_message(f"💥 더블다운! 카드: {new_card} (합계: **{score}점**) — **버스트!** (베팅: {self.player.bet} 칩)", ephemeral=False)
+            await interaction.response.send_message(f"💥 더블다운! 카드: {new_card} (합계: **{score}점**) — **버스트!** (베팅: {self.player.bet:,} 칩)", ephemeral=False)
         else:
             self.player.status = "STAND"
-            await interaction.response.send_message(f"💰 더블다운! 카드: {new_card} (합계: **{score}점**) — 스탠드 (베팅: {self.player.bet} 칩)", ephemeral=False)
+            await interaction.response.send_message(f"💰 더블다운! 카드: {new_card} (합계: **{score}점**) — 스탠드 (베팅: {self.player.bet:,} 칩)", ephemeral=False)
 
         for item in self.children:
             item.disabled = True
@@ -433,7 +488,7 @@ class PlayerActionView(discord.ui.View):
                 f"🎩 **딜러 공개 카드:** {self.game.dealer_cards[0]} [??]\n\n"
                 f"👤 **{self.player.display_name}님의 패:** {self.player.format_cards()}\n"
                 f"📊 **현재 점수:** **{self.player.score()}점** {'(소프트)' if self.player.is_soft() else ''}\n"
-                f"🪙 **베팅액:** {self.player.bet} 칩 (남은 칩: {self.player.chips - self.player.bet} 칩)\n\n"
+                f"🪙 **베팅액:** {self.player.bet:,} 칩 (남은 칩: {self.player.chips - self.player.bet:,} 칩)\n\n"
                 "원하시는 행동을 선택하세요:"
             ),
             color=0x2980b9
@@ -571,7 +626,7 @@ async def settlement_phase(game: BlackjackGame):
             # 플레이어 버스트: 패배
             p.chips -= p.bet
             p.net_gain = -p.bet
-            status_desc = f"❌ 버스트 패배 (-{p.bet} 칩)"
+            status_desc = f"❌ 버스트 패배 (-{p.bet:,} 칩 = -{p.bet * 100:,}P)"
         elif dealer_has_bj:
             if p_bj:
                 # 둘 다 블랙잭: 푸시
@@ -580,23 +635,23 @@ async def settlement_phase(game: BlackjackGame):
             else:
                 p.chips -= p.bet
                 p.net_gain = -p.bet
-                status_desc = f"❌ 딜러 블랙잭으로 패배 (-{p.bet} 칩)"
+                status_desc = f"❌ 딜러 블랙잭으로 패배 (-{p.bet:,} 칩 = -{p.bet * 100:,}P)"
         elif p_bj:
             # 내추럴 블랙잭 승리 (3:2)
             win_amount = int(p.bet * 1.5)
             p.chips += win_amount
             p.net_gain = win_amount
-            status_desc = f"🎉 **내추럴 블랙잭 승리! (+{win_amount} 칩)**"
+            status_desc = f"🎉 **내추럴 블랙잭 승리! (+{win_amount:,} 칩 = +{win_amount * 150:,}P)**"
         elif dealer_bust:
             # 딜러 버스트: 플레이어 승리 (1:1)
             p.chips += p.bet
             p.net_gain = p.bet
-            status_desc = f"🎉 딜러 버스트로 승리 (+{p.bet} 칩)"
+            status_desc = f"🎉 딜러 버스트로 승리 (+{p.bet:,} 칩 = +{p.bet * 100:,}P)"
         elif p_score > dealer_score:
             # 점수 승리 (1:1)
             p.chips += p.bet
             p.net_gain = p.bet
-            status_desc = f"🎉 점수 승리 ({p_score} vs {dealer_score}) (+{p.bet} 칩)"
+            status_desc = f"🎉 점수 승리 ({p_score} vs {dealer_score}) (+{p.bet:,} 칩 = +{p.bet * 100:,}P)"
         elif p_score == dealer_score:
             # 동점 (Push)
             p.net_gain = 0
@@ -605,12 +660,18 @@ async def settlement_phase(game: BlackjackGame):
             # 점수 패배
             p.chips -= p.bet
             p.net_gain = -p.bet
-            status_desc = f"❌ 점수 패배 ({p_score} vs {dealer_score}) (-{p.bet} 칩)"
+            status_desc = f"❌ 점수 패배 ({p_score} vs {dealer_score}) (-{p.bet:,} 칩 = -{p.bet * 100:,}P)"
 
         card_str = " ".join(str(c) for c in p.cards)
-        result_lines.append(f"• **{p.display_name}**: {card_str} ({p_score}점)\n  결과: {status_desc} | 남은 보유 칩: **{p.chips} 칩**")
+        result_lines.append(f"• **{p.display_name}**: {card_str} ({p_score}점)\n  결과: {status_desc} | 남은 보유 칩: **{p.chips:,} 칩 (= {p.chips * 100:,}P)**")
 
     embed.add_field(name="👥 플레이어 결과", value="\n\n".join(result_lines), inline=False)
+
+    # 정산: 칩 순손익 × 100 = P. 잔액 초과 손실은 보유분까지만 차감(클램프) — 즉시 반영.
+    for p in game.players:
+        if p.net_gain != 0:
+            db.adjust_points_safe(p.member.id, p.net_gain * 100, f"BLACKJACK_R{game.round_num}")
+
     db.record_game_result(
         f"{game.session_id}:round:{game.round_num}",
         "blackjack",

@@ -13,6 +13,33 @@ class GameResultTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_adjust_points_safe_adds_and_subtracts(self):
+        self.db.get_user_economy(601)
+        self.assertEqual(self.db.adjust_points_safe(601, 100, "TEST_ADD"), 600)
+        self.assertEqual(self.db.adjust_points_safe(601, -30, "TEST_SUB"), 570)
+        self.assertEqual(self.db.get_user_economy(601)["points"], 570)
+
+    def test_adjust_points_safe_clamps_at_zero(self):
+        self.db.get_user_economy(602)
+        balance = self.db.adjust_points_safe(602, -600, "TEST_OVER_DRAIN")
+        self.assertEqual(balance, 0)
+        self.assertEqual(self.db.get_user_economy(602)["points"], 0)
+        with self.db._connection() as conn:
+            row = conn.execute(
+                "SELECT amount, balance_after FROM point_logs WHERE reason = 'TEST_OVER_DRAIN'"
+            ).fetchone()
+        self.assertEqual(row, (-500, 0))
+
+    def test_adjust_points_safe_never_goes_negative_from_low_balance(self):
+        self.db.get_user_economy(603)
+        self.db.adjust_points_safe(603, -450, "TEST_ALMOST_ZERO")
+        self.assertEqual(self.db.get_user_economy(603)["points"], 50)
+        self.assertEqual(self.db.adjust_points_safe(603, -100, "TEST_DRAIN_TO_ZERO"), 0)
+
+    def test_adjust_points_safe_auto_creates_user(self):
+        self.assertEqual(self.db.adjust_points_safe(604, 0, "TEST_NOOP"), 500)
+        self.assertEqual(self.db.get_user_economy(604)["points"], 500)
+
     def test_records_results_once_and_updates_legacy_stats(self):
         participants = [101, 102, 103]
         winners = [101]
