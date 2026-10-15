@@ -103,7 +103,7 @@ class MainMenuView(discord.ui.View):
         from cogs.prisoners_night.prisoners_night import start_prisoners_ui
         await start_prisoners_ui(interaction)
 
-    @discord.ui.button(label="블랙잭(1~5인)", style=discord.ButtonStyle.success, custom_id="menu_blackjack_game", emoji="🂡")
+    @discord.ui.button(label="블랙잭(1~5인)", style=discord.ButtonStyle.success, custom_id="menu_blackjack_game", emoji="🃏")
     async def blackjack_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         from cogs.blackjack.blackjack import start_blackjack_ui
         await start_blackjack_ui(interaction)

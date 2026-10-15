@@ -399,7 +399,7 @@ class PlayerActionView(discord.ui.View):
         await interaction.message.edit(view=self)
         await self._handle_next(interaction)
 
-    @discord.ui.button(label="더블다운 (Double)", style=discord.ButtonStyle.success, emoji="✖️2", custom_id="bj_double")
+    @discord.ui.button(label="더블다운 (Double)", style=discord.ButtonStyle.success, emoji="💰", custom_id="bj_double")
     async def double_down_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.player.member.id:
             await interaction.response.send_message("현재 당신의 차례가 아닙니다!", ephemeral=True)
