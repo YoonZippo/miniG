@@ -103,6 +103,11 @@ class MainMenuView(discord.ui.View):
         from cogs.prisoners_night.prisoners_night import start_prisoners_ui
         await start_prisoners_ui(interaction)
 
+    @discord.ui.button(label="블랙잭(1~5인)", style=discord.ButtonStyle.success, custom_id="menu_blackjack_game", emoji="🂡")
+    async def blackjack_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.blackjack.blackjack import start_blackjack_ui
+        await start_blackjack_ui(interaction)
+
     @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -195,6 +200,17 @@ async def force_stop(ctx):
                 game.timer_task.cancel()
             game.phase = "CANCELLED"
             active_prisoners_games.pop(ctx.channel.id, None)
+    except ImportError:
+        pass
+
+    try:
+        from cogs.blackjack.blackjack import active_blackjack_games
+        if ctx.channel.id in active_blackjack_games:
+            game = active_blackjack_games[ctx.channel.id]
+            if game.timer_task and not game.timer_task.done():
+                game.timer_task.cancel()
+            game.phase = "CANCELLED"
+            active_blackjack_games.pop(ctx.channel.id, None)
     except ImportError:
         pass
         

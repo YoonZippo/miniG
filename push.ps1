@@ -21,4 +21,4 @@ if (-not $msg) { $msg = "Self Update" }
 & $gitCmd push origin main
 
 Write-Host "`n[SUCCESS] Local changes pushed to GitHub." -ForegroundColor Green
-Write-Host "Now run ./update.sh on your Mac." -ForegroundColor Cyan
+Write-Host "Now double-click 'update.command' on your Mac (or run ./update.sh)." -ForegroundColor Cyan
