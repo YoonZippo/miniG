@@ -108,6 +108,11 @@ class MainMenuView(discord.ui.View):
         from cogs.blackjack.blackjack import start_blackjack_ui
         await start_blackjack_ui(interaction)
 
+    @discord.ui.button(label="텍사스 홀덤(1~8인)", style=discord.ButtonStyle.primary, custom_id="menu_holdem_game", emoji="♠️")
+    async def holdem_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.holdem.holdem import start_holdem_ui
+        await start_holdem_ui(interaction)
+
     @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -211,6 +216,17 @@ async def force_stop(ctx):
                 game.timer_task.cancel()
             game.phase = "CANCELLED"
             active_blackjack_games.pop(ctx.channel.id, None)
+    except ImportError:
+        pass
+
+    try:
+        from cogs.holdem.holdem import active_holdem_games
+        if ctx.channel.id in active_holdem_games:
+            game = active_holdem_games[ctx.channel.id]
+            if game.timer_task and not game.timer_task.done():
+                game.timer_task.cancel()
+            game.phase = "CANCELLED"
+            active_holdem_games.pop(ctx.channel.id, None)
     except ImportError:
         pass
         
