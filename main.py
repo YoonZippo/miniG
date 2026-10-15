@@ -98,6 +98,11 @@ class MainMenuView(discord.ui.View):
         from cogs.cheese_thief.cheese_thief import start_cheese_ui
         await start_cheese_ui(interaction)
 
+    @discord.ui.button(label="죄수들의 밤(4~10인)", style=discord.ButtonStyle.danger, custom_id="menu_prisoners_night_game", emoji="⛓️")
+    async def prisoners_night_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.prisoners_night.prisoners_night import start_prisoners_ui
+        await start_prisoners_ui(interaction)
+
     @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -179,6 +184,17 @@ async def force_stop(ctx):
                 game.timer_task.cancel()
             game.phase = "CANCELLED"
             active_cheese_games.pop(ctx.channel.id, None)
+    except ImportError:
+        pass
+
+    try:
+        from cogs.prisoners_night.prisoners_night import active_prisoners_games
+        if ctx.channel.id in active_prisoners_games:
+            game = active_prisoners_games[ctx.channel.id]
+            if game.timer_task and not game.timer_task.done():
+                game.timer_task.cancel()
+            game.phase = "CANCELLED"
+            active_prisoners_games.pop(ctx.channel.id, None)
     except ImportError:
         pass
         
