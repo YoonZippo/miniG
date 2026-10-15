@@ -8,6 +8,16 @@ git reset --hard origin/main
 git clean -fd
 
 echo "[INFO] Rebuilding and restarting Docker containers..."
-sudo docker compose up -d --build
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS (Docker Desktop runs without sudo)
+    docker compose up -d --build
+else
+    # Linux (GCE or Ubuntu server)
+    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        docker compose up -d --build
+    else
+        sudo docker compose up -d --build
+    fi
+fi
 
 echo "[SUCCESS] miniG bot is updated and running."

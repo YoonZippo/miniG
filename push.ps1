@@ -1,15 +1,24 @@
 # push.ps1 for Windows
 # Usage: .\push.ps1
 
-# 한글 출력을 위해 출력 인코딩 설정
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# Git 경로 탐색 (PATH 또는 기본 설치 경로)
+$gitCmd = "git"
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    if (Test-Path "X:\program files\Git\cmd\git.exe") {
+        $gitCmd = "X:\program files\Git\cmd\git.exe"
+    } elseif (Test-Path "C:\Program Files\Git\cmd\git.exe") {
+        $gitCmd = "C:\Program Files\Git\cmd\git.exe"
+    }
+}
 
 $msg = Read-Host -Prompt "Enter Update comment (if empty, 'Self Update')"
 if (-not $msg) { $msg = "Self Update" }
 
-git add .
-git commit -m $msg
-git push origin main
+& $gitCmd add .
+& $gitCmd commit -m $msg
+& $gitCmd push origin main
 
 Write-Host "`n[SUCCESS] Local changes pushed to GitHub." -ForegroundColor Green
-Write-Host "Now run ./update.sh on your GCE server."
+Write-Host "Now run ./update.sh on your Mac." -ForegroundColor Cyan

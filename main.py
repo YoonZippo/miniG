@@ -93,6 +93,11 @@ class MainMenuView(discord.ui.View):
         else:
             await interaction.response.send_message("5초준다 시스템을 불러올 수 없습니다!", ephemeral=True)
 
+    @discord.ui.button(label="치즈 도둑(4~8인)", style=discord.ButtonStyle.primary, custom_id="menu_cheese_thief_game", emoji="🧀")
+    async def cheese_thief_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.cheese_thief.cheese_thief import start_cheese_ui
+        await start_cheese_ui(interaction)
+
     @discord.ui.button(label="업데이트 목록", style=discord.ButtonStyle.secondary, custom_id="menu_update_list", emoji="📜")
     async def update_list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -163,6 +168,17 @@ async def force_stop(ctx):
     try:
         from cogs.consonant.cog import active_consonant_games
         active_consonant_games.discard(ctx.channel.id)
+    except ImportError:
+        pass
+
+    try:
+        from cogs.cheese_thief.cheese_thief import active_cheese_games
+        if ctx.channel.id in active_cheese_games:
+            game = active_cheese_games[ctx.channel.id]
+            if game.timer_task and not game.timer_task.done():
+                game.timer_task.cancel()
+            game.phase = "CANCELLED"
+            active_cheese_games.pop(ctx.channel.id, None)
     except ImportError:
         pass
         
